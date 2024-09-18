@@ -33,11 +33,13 @@
 //! as showing evidence of an absence of corruption.
 
 use crate::pmem::pmcopy_t::*;
+use crate::pmem::frac_v::*;
 use builtin::*;
 use builtin_macros::*;
 use core::fmt::Debug;
 use vstd::bytes::*;
 use vstd::prelude::*;
+use vstd::invariant::*;
 
 use deps_hack::crc64fast::Digest;
 
@@ -404,6 +406,291 @@ verus! {
 
     pub struct PersistentMemoryConstants {
         pub impervious_to_corruption: bool
+    }
+
+    pub const PMEM_INV_NS: u64 = 12345;
+
+    pub trait PMRegionGetSizeOperation<ResultT> where Self: Sized {
+        spec fn id(&self) -> int;
+        spec fn pre(&self) -> bool;
+        spec fn post(&self, r: ResultT, v: u64) -> bool;
+        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 2>,
+                       v: u64, tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
+            requires
+                self.pre(),
+                old(r).valid(self.id(), 1),
+                v == old(r).val().len(),
+            ensures
+                r.valid(self.id(), 1),
+                r.val() == old(r).val(),
+                self.post(result, v),
+            opens_invariants
+                [ PMEM_INV_NS ];
+    }
+
+    pub trait PMRegionReadOperation<ResultT> where Self: Sized {
+        spec fn addr(&self) -> u64;
+        spec fn num_bytes(&self) -> u64;
+        spec fn constants(&self) -> PersistentMemoryConstants;
+        spec fn id(&self) -> int;
+        spec fn pre(&self) -> bool;
+        spec fn post(&self, r: ResultT, v: Result<Vec<u8>, PmemError>) -> bool;
+        proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 2>,
+                          tracked credit: OpenInvariantCredit)
+            requires
+                self.pre(),
+                r.valid(self.id(), 1),
+            ensures
+                self.addr() + self.num_bytes() <= r.val().len(),
+                r.val().no_outstanding_writes_in_range(self.addr() as int, self.addr() + self.num_bytes()),
+            opens_invariants
+                [ PMEM_INV_NS ];
+        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 2>,
+                       v: Result<Vec<u8>, PmemError>, tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
+            requires
+                self.pre(),
+                old(r).valid(self.id(), 1),
+                match v {
+                    Ok(bytes) => {
+                        let true_bytes = old(r).val().committed().subrange(self.addr() as int, self.addr() + self.num_bytes());
+                        let addrs = Seq::<int>::new(self.num_bytes() as nat, |i: int| i + self.addr());
+                        &&& // If the persistent memory regions are impervious
+                            // to corruption, read returns the last bytes
+                            // written. Otherwise, it returns a
+                            // possibly-corrupted version of those bytes.
+                            if self.constants().impervious_to_corruption {
+                                bytes@ == true_bytes
+                            }
+                            else {
+                                maybe_corrupted(bytes@, true_bytes, addrs)
+                            }
+                        }
+                    _ => false
+                },
+            ensures
+                r.valid(self.id(), 1),
+                r.val() == old(r).val(),
+                self.post(result, v),
+            opens_invariants
+                [ PMEM_INV_NS ];
+    }
+
+    pub trait PMRegionReadAlignedOperation<S, ResultT> where S: PmCopy, Self: Sized {
+        spec fn addr(&self) -> u64;
+        spec fn constants(&self) -> PersistentMemoryConstants;
+        spec fn id(&self) -> int;
+        spec fn pre(&self) -> bool;
+        spec fn post(&self, r: ResultT, v: Result<MaybeCorruptedBytes<S>, PmemError>) -> bool;
+        proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 2>,
+                          tracked credit: OpenInvariantCredit)
+            requires
+                self.pre(),
+                r.valid(self.id(), 1),
+            ensures
+                0 <= self.addr() < self.addr() + S::spec_size_of() <= r.val().len(),
+                r.val().no_outstanding_writes_in_range(self.addr() as int, self.addr() + S::spec_size_of()),
+                // We must have previously written a serialized S to this addr
+                S::bytes_parseable(r.val().committed().subrange(self.addr() as int, self.addr() + S::spec_size_of())),
+            opens_invariants
+                [ PMEM_INV_NS ];
+        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 2>,
+                       v: Result<MaybeCorruptedBytes<S>, PmemError>,
+                       tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
+            requires
+                self.pre(),
+                old(r).valid(self.id(), 1),
+                match v {
+                    Ok(bytes) => {
+                        let true_bytes = old(r).val().committed().subrange(self.addr() as int, self.addr() + S::spec_size_of());
+                        let addrs = Seq::<int>::new(S::spec_size_of() as nat, |i: int| i + self.addr());
+                        // If the persistent memory regions are impervious
+                        // to corruption, read returns the last bytes
+                        // written. Otherwise, it returns a
+                        // possibly-corrupted version of those bytes.
+                        if self.constants().impervious_to_corruption {
+                            bytes@ == true_bytes
+                        }
+                        else {
+                            maybe_corrupted(bytes@, true_bytes, addrs)
+                        }
+                    }
+                    _ => false
+                },
+            ensures
+                r.valid(self.id(), 1),
+                r.val() == old(r).val(),
+                self.post(result, v),
+            opens_invariants
+                [ PMEM_INV_NS ];
+    }
+
+    pub trait PMRegionWriteOperation<ResultT> where Self: Sized {
+        spec fn addr(&self) -> u64;
+        spec fn bytes(&self) -> Seq<u8>;
+        spec fn id(&self) -> int;
+        spec fn pre(&self) -> bool;
+        spec fn post(&self, r: ResultT) -> bool;
+        proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 2>,
+                          tracked credit: OpenInvariantCredit)
+            requires
+                self.pre(),
+                r.valid(self.id(), 1),
+            ensures
+                self.addr() + self.bytes().len() <= r.val().len(),
+                self.addr() + self.bytes().len() <= u64::MAX,
+                // Writes aren't allowed where there are already outstanding writes.
+                r.val().no_outstanding_writes_in_range(self.addr() as int, self.addr() + self.bytes().len()),
+            opens_invariants
+                [ PMEM_INV_NS ];
+        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 2>,
+                       tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
+            requires
+                self.pre(),
+                old(r).valid(self.id(), 1),
+            ensures
+                r.valid(self.id(), 1),
+                r.val() == old(r).val().write(self.addr() as int, self.bytes()),
+                self.post(result),
+            opens_invariants
+                [ PMEM_INV_NS ];
+    }
+
+    pub trait PMRegionSerializeAndWriteOperation<S, ResultT> where S: PmCopy, Self: Sized {
+        spec fn addr(&self) -> u64;
+        spec fn to_write(&self) -> S;
+        spec fn id(&self) -> int;
+        spec fn pre(&self) -> bool;
+        spec fn post(&self, r: ResultT) -> bool;
+        proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 2>,
+                          tracked credit: OpenInvariantCredit)
+            requires
+                self.pre(),
+                r.valid(self.id(), 1),
+            ensures
+                self.addr() + S::spec_size_of() <= r.val().len(),
+                r.val().no_outstanding_writes_in_range(self.addr() as int, self.addr() + S::spec_size_of()),
+            opens_invariants
+                [ PMEM_INV_NS ];
+        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 2>,
+                       tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
+            requires
+                self.pre(),
+                old(r).valid(self.id(), 1),
+            ensures
+                r.valid(self.id(), 1),
+                r.val() == old(r).val().write(self.addr() as int, self.to_write().spec_to_bytes()),
+                self.post(result),
+            opens_invariants
+                [ PMEM_INV_NS ];
+    }
+
+    pub trait PMRegionFlushOperation<ResultT> where Self: Sized {
+        spec fn id(&self) -> int;
+        spec fn pre(&self) -> bool;
+        spec fn post(&self, r: ResultT) -> bool;
+        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 2>,
+                       tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
+            requires
+                self.pre(),
+                old(r).valid(self.id(), 1),
+            ensures
+                r.valid(self.id(), 1),
+                r.val() == old(r).val().flush(),
+                self.post(result),
+            opens_invariants
+                [ PMEM_INV_NS ];
+    }
+
+    pub trait PersistentMemoryRegionFupd
+    {
+        spec fn inv(&self) -> bool;
+
+        spec fn id(&self) -> int;
+
+        spec fn constants(&self) -> PersistentMemoryConstants;
+
+        fn get_region_size<ResultT, Op>(&self, Tracked(op): Tracked<Op>) -> (result: (u64, Tracked<ResultT>))
+            where
+                Op: PMRegionGetSizeOperation<ResultT>,
+            requires
+                self.inv(),
+                op.pre(),
+                op.id() == self.id(),
+            ensures
+                op.post(result.1@, result.0),
+        ;
+
+        fn read_unaligned<ResultT, Op>(&self, addr: u64, num_bytes: u64, Tracked(op): Tracked<Op>) -> (result: (Result<Vec<u8>, PmemError>, Tracked<ResultT>))
+            where
+                Op: PMRegionReadOperation<ResultT>,
+            requires 
+                self.inv(),
+                op.pre(),
+                op.addr() == addr,
+                op.num_bytes() == num_bytes,
+                op.constants() == self.constants(),
+                op.id() == self.id(),
+            ensures 
+                op.post(result.1@, result.0),
+        ;
+
+        fn write<ResultT, Op>(&mut self, addr: u64, bytes: &[u8], Tracked(op): Tracked<Op>) -> (result: Tracked<ResultT>)
+            where
+                Op: PMRegionWriteOperation<ResultT>,
+            requires
+                old(self).inv(),
+                op.pre(),
+                op.addr() == addr,
+                op.bytes() == bytes@,
+                op.id() == old(self).id(),
+            ensures
+                self.inv(),
+                self.constants() == old(self).constants(),
+                op.post(result@),
+        ;
+
+        fn flush<ResultT, Op>(&mut self, Tracked(op): Tracked<Op>) -> (result: Tracked<ResultT>)
+            where
+                Op: PMRegionFlushOperation<ResultT>,
+            requires
+                old(self).inv(),
+                op.pre(),
+                op.id() == old(self).id(),
+            ensures
+                self.inv(),
+                self.constants() == old(self).constants(),
+                op.post(result@),
+        ;
+
+        fn read_aligned<S, ResultT, Op>(&self, addr: u64, Tracked(op): Tracked<Op>) -> (result: (Result<MaybeCorruptedBytes<S>, PmemError>, Tracked<ResultT>))
+            where 
+                S: PmCopy,
+                Op: PMRegionReadAlignedOperation<S, ResultT>,
+            requires
+                self.inv(),
+                op.pre(),
+                op.addr() == addr,
+                op.constants() == self.constants(),
+                op.id() == self.id(),
+            ensures
+                op.post(result.1@, result.0),
+        ;
+
+        fn serialize_and_write<S, ResultT, Op>(&mut self, addr: u64, to_write: &S, Tracked(op): Tracked<Op>) -> (result: Tracked<ResultT>)
+            where
+                S: PmCopy,
+                Op: PMRegionSerializeAndWriteOperation<S, ResultT>,
+            requires
+                old(self).inv(),
+                op.pre(),
+                op.addr() == addr,
+                op.to_write() == to_write,
+                op.id() == old(self).id(),
+            ensures
+                self.inv(),
+                self.constants() == old(self).constants(),
+                op.post(result@),
+        ;
     }
 
     pub trait PersistentMemoryRegion : Sized

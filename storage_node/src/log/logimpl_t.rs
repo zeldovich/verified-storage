@@ -244,6 +244,57 @@ verus! {
         }
     }
 
+    pub struct WRPMReadUnaligned<'a> {
+        addr: u64,
+        num_bytes: u64,
+        ghost constants: PersistentMemoryConstants,
+        frac: &'a Tracked<FractionalResource<PersistentMemoryRegionView, 3>>,
+    }
+
+    impl PMRegionReadOperation<EmptyResult> for WRPMReadUnaligned<'_> {
+        closed spec fn addr(&self) -> u64 { self.addr }
+        closed spec fn num_bytes(&self) -> u64 { self.num_bytes }
+        closed spec fn constants(&self) -> PersistentMemoryConstants { self.constants }
+        closed spec fn id(&self) -> int { self.frac@.id() }
+        closed spec fn pre(&self) -> bool {
+            self.frac@.inv() &&
+            self.addr() + self.num_bytes() <= self.frac@.val().len() &&
+            self.frac@.val().no_outstanding_writes_in_range(self.addr() as int, self.addr() + self.num_bytes())
+        }
+        closed spec fn post(&self, r: EmptyResult, v: Result<Vec<u8>, PmemError>) -> bool {
+            match v {
+                Ok(bytes) => {
+                    let true_bytes = self.frac@.val().committed().subrange(self.addr() as int, self.addr() + self.num_bytes());
+                    let addrs = Seq::<int>::new(self.num_bytes() as nat, |i: int| i + self.addr());
+                    &&& // If the persistent memory regions are impervious
+                        // to corruption, read returns the last bytes
+                        // written. Otherwise, it returns a
+                        // possibly-corrupted version of those bytes.
+                        if self.constants().impervious_to_corruption {
+                                bytes@ == true_bytes
+                        }
+                        else {
+                            maybe_corrupted(bytes@, true_bytes, addrs)
+                        }
+                    }
+                _ => false
+            }
+        }
+
+        proof fn validate(tracked &self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 3>,
+                          tracked credit: OpenInvariantCredit)
+        {
+            r.agree(self.frac.borrow())
+        }
+
+        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 3>,
+                       v: Result<Vec<u8>, PmemError>, tracked credit: OpenInvariantCredit) -> (tracked result: EmptyResult)
+        {
+            r.agree(self.frac.borrow());
+            EmptyResult{}
+        }
+    }
+
     impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegionTrait<Perm> for WriteRestrictedPersistentMemoryRegionV2<Perm, PMRegion>
         where
             Perm: CheckPermission<Seq<u8>>,
@@ -294,9 +345,11 @@ verus! {
             unimplemented!()
         }
 
-        #[verifier::external_body]
-        exec fn read_unaligned(&self, addr: u64, num_bytes: u64) -> (bytes: Result<Vec<u8>, PmemError>) {
-            unimplemented!()
+        exec fn read_unaligned(&self, addr: u64, num_bytes: u64) -> (bytes: Result<Vec<u8>, PmemError>)
+        {
+            let tracked op = WRPMReadUnaligned{ addr: addr, num_bytes: num_bytes, constants: self.pm_region.constants(), frac: &self.frac };
+            let (result, Tracked(opres)) = self.pm_region.read_unaligned::<_, WRPMReadUnaligned>(addr, num_bytes, Tracked(op));
+            result
         }
     }
 

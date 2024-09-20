@@ -435,12 +435,14 @@ verus! {
         spec fn id(&self) -> int;
         spec fn pre(&self) -> bool;
         spec fn post(&self, r: ResultT, v: Result<Vec<u8>, PmemError>) -> bool;
-        proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
+        proof fn validate(tracked &self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 3>,
                           tracked credit: OpenInvariantCredit)
             requires
                 self.pre(),
-                r.valid(self.id(), 1),
+                old(r).valid(self.id(), 1),
             ensures
+                r.valid(self.id(), 1),
+                r.val() == old(r).val(),
                 self.addr() + self.num_bytes() <= r.val().len(),
                 r.val().no_outstanding_writes_in_range(self.addr() as int, self.addr() + self.num_bytes()),
             opens_invariants

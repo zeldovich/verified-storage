@@ -221,20 +221,26 @@ verus! {
         ghost perm: Option<Perm>, // Needed to work around Rust limitation that Perm must be referenced
     }
 
+    pub struct EmptyResult {}
+
     pub struct WRPMGetRegionSize<'a> {
         frac: &'a Tracked<FractionalResource<PersistentMemoryRegionView, 3>>,
     }
 
-    impl PMRegionGetSizeOperation<()> for WRPMGetRegionSize<'_> {
+    impl PMRegionGetSizeOperation<EmptyResult> for WRPMGetRegionSize<'_> {
         closed spec fn id(&self) -> int { self.frac@.id() }
-        closed spec fn pre(&self) -> bool { true }
-        closed spec fn post(&self, r: (), v: u64) -> bool {
+        closed spec fn pre(&self) -> bool {
+            self.frac@.inv()
+        }
+        closed spec fn post(&self, r: EmptyResult, v: u64) -> bool {
             v == self.frac@.val().len()
         }
 
         proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 3>,
-                       v: u64, tracked credit: OpenInvariantCredit) -> (tracked result: ())
+                       v: u64, tracked credit: OpenInvariantCredit) -> (tracked result: EmptyResult)
         {
+            r.agree(self.frac.borrow());
+            EmptyResult{}
         }
     }
 
@@ -262,7 +268,7 @@ verus! {
         exec fn get_region_size(&self) -> (result: u64)
         {
             let tracked op = WRPMGetRegionSize{ frac: &self.frac };
-            let (result, opres) = self.pm_region.get_region_size(Tracked(op));
+            let (result, Tracked(opres)) = self.pm_region.get_region_size::<_, WRPMGetRegionSize>(Tracked(op));
             result
         }
 

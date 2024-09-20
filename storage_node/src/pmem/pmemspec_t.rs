@@ -414,7 +414,7 @@ verus! {
         spec fn id(&self) -> int;
         spec fn pre(&self) -> bool;
         spec fn post(&self, r: ResultT, v: u64) -> bool;
-        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 2>,
+        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 3>,
                        v: u64, tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
             requires
                 self.pre(),
@@ -435,7 +435,7 @@ verus! {
         spec fn id(&self) -> int;
         spec fn pre(&self) -> bool;
         spec fn post(&self, r: ResultT, v: Result<Vec<u8>, PmemError>) -> bool;
-        proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 2>,
+        proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
                           tracked credit: OpenInvariantCredit)
             requires
                 self.pre(),
@@ -445,7 +445,7 @@ verus! {
                 r.val().no_outstanding_writes_in_range(self.addr() as int, self.addr() + self.num_bytes()),
             opens_invariants
                 [ PMEM_INV_NS ];
-        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 2>,
+        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 3>,
                        v: Result<Vec<u8>, PmemError>, tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
             requires
                 self.pre(),
@@ -481,7 +481,7 @@ verus! {
         spec fn id(&self) -> int;
         spec fn pre(&self) -> bool;
         spec fn post(&self, r: ResultT, v: Result<MaybeCorruptedBytes<S>, PmemError>) -> bool;
-        proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 2>,
+        proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
                           tracked credit: OpenInvariantCredit)
             requires
                 self.pre(),
@@ -493,7 +493,7 @@ verus! {
                 S::bytes_parseable(r.val().committed().subrange(self.addr() as int, self.addr() + S::spec_size_of())),
             opens_invariants
                 [ PMEM_INV_NS ];
-        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 2>,
+        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 3>,
                        v: Result<MaybeCorruptedBytes<S>, PmemError>,
                        tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
             requires
@@ -530,7 +530,7 @@ verus! {
         spec fn id(&self) -> int;
         spec fn pre(&self) -> bool;
         spec fn post(&self, r: ResultT) -> bool;
-        proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 2>,
+        proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
                           tracked credit: OpenInvariantCredit)
             requires
                 self.pre(),
@@ -542,7 +542,7 @@ verus! {
                 r.val().no_outstanding_writes_in_range(self.addr() as int, self.addr() + self.bytes().len()),
             opens_invariants
                 [ PMEM_INV_NS ];
-        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 2>,
+        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 3>,
                        tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
             requires
                 self.pre(),
@@ -561,7 +561,7 @@ verus! {
         spec fn id(&self) -> int;
         spec fn pre(&self) -> bool;
         spec fn post(&self, r: ResultT) -> bool;
-        proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 2>,
+        proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
                           tracked credit: OpenInvariantCredit)
             requires
                 self.pre(),
@@ -571,7 +571,7 @@ verus! {
                 r.val().no_outstanding_writes_in_range(self.addr() as int, self.addr() + S::spec_size_of()),
             opens_invariants
                 [ PMEM_INV_NS ];
-        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 2>,
+        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 3>,
                        tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
             requires
                 self.pre(),
@@ -588,7 +588,7 @@ verus! {
         spec fn id(&self) -> int;
         spec fn pre(&self) -> bool;
         spec fn post(&self, r: ResultT) -> bool;
-        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 2>,
+        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 3>,
                        tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
             requires
                 self.pre(),
@@ -601,7 +601,7 @@ verus! {
                 [ PMEM_INV_NS ];
     }
 
-    pub trait PersistentMemoryRegionFupd
+    pub trait PersistentMemoryRegionV2
     {
         spec fn inv(&self) -> bool;
 

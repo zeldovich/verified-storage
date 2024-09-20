@@ -43,9 +43,12 @@ use crate::log::logimpl_v::UntrustedLogImpl;
 use crate::log::logspec_t::AbstractLogState;
 use crate::pmem::pmemspec_t::*;
 use crate::pmem::wrpm_t::*;
+use crate::pmem::pmcopy_t::*;
+use crate::pmem::frac_v::*;
 use builtin::*;
 use builtin_macros::*;
 use vstd::prelude::*;
+use vstd::invariant::*;
 
 use deps_hack::rand::Rng;
 
@@ -181,6 +184,138 @@ verus! {
         deps_hack::rand::thread_rng().gen::<u128>()
     }
 
+    // Invariant and write-restricted storage adapter.
+
+    pub struct LogInvState {
+        // State of the persistent memory from PersistentMemoryRegion.
+        pm: FractionalResource<PersistentMemoryRegionView, 3>,
+
+        // State of the abstract log.
+        log: FractionalResource<AbstractLogState, 2>,
+    }
+
+    pub struct LogInvParam {
+        pub pm_frac_id: int,
+        pub log_frac_id: int,
+        pub log_id: u128,
+    }
+
+    pub struct LogInvPred {}
+
+    impl InvariantPredicate<LogInvParam, LogInvState> for LogInvPred {
+        closed spec fn inv(k: LogInvParam, v: LogInvState) -> bool {
+            v.pm.valid(k.pm_frac_id, 1) &&
+            v.log.valid(k.log_frac_id, 1) &&
+            UntrustedLogImpl::recover(v.pm.val().flush().committed(), k.log_id) == Some(v.log.val())
+        }
+    }
+
+    #[allow(dead_code)]
+    pub struct WriteRestrictedPersistentMemoryRegionV2<Perm, PMRegion>
+        where
+            Perm: CheckPermission<Seq<u8>>,
+            PMRegion: PersistentMemoryRegionV2
+    {
+        pm_region: PMRegion,
+        frac: Tracked<FractionalResource<PersistentMemoryRegionView, 3>>,
+        ghost perm: Option<Perm>, // Needed to work around Rust limitation that Perm must be referenced
+    }
+
+    pub struct WRPMGetRegionSize<'a> {
+        frac: &'a Tracked<FractionalResource<PersistentMemoryRegionView, 3>>,
+    }
+
+    impl PMRegionGetSizeOperation<()> for WRPMGetRegionSize<'_> {
+        closed spec fn id(&self) -> int { self.frac@.id() }
+        closed spec fn pre(&self) -> bool { true }
+        closed spec fn post(&self, r: (), v: u64) -> bool {
+            v == self.frac@.val().len()
+        }
+
+        proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 3>,
+                       v: u64, tracked credit: OpenInvariantCredit) -> (tracked result: ())
+        {
+        }
+    }
+
+    impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegionTrait<Perm> for WriteRestrictedPersistentMemoryRegionV2<Perm, PMRegion>
+        where
+            Perm: CheckPermission<Seq<u8>>,
+            PMRegion: PersistentMemoryRegionV2
+    {
+        closed spec fn view(&self) -> PersistentMemoryRegionView
+        {
+            self.frac@.val()
+        }
+
+        closed spec fn inv(&self) -> bool
+        {
+            self.pm_region.inv() &&
+            self.frac@.valid(self.pm_region.id(), 1)
+        }
+
+        closed spec fn constants(&self) -> PersistentMemoryConstants
+        {
+            self.pm_region.constants()
+        }
+
+        exec fn get_region_size(&self) -> (result: u64)
+        {
+            let tracked op = WRPMGetRegionSize{ frac: &self.frac };
+            let (result, opres) = self.pm_region.get_region_size(Tracked(op));
+            result
+        }
+
+        #[verifier::external_body]
+        exec fn write(&mut self, addr: u64, bytes: &[u8], perm: Tracked<&Perm>) {
+            unimplemented!()
+        }
+
+        #[verifier::external_body]
+        exec fn serialize_and_write<S>(&mut self, addr: u64, to_write: &S, perm: Tracked<&Perm>) {
+            unimplemented!()
+        }
+
+        #[verifier::external_body]
+        exec fn flush(&mut self) {
+            unimplemented!()
+        }
+
+        #[verifier::external_body]
+        exec fn read_aligned<S>(&self, addr: u64) -> (bytes: Result<MaybeCorruptedBytes<S>, PmemError>)
+            where S: PmCopy + Sized
+        {
+            unimplemented!()
+        }
+
+        #[verifier::external_body]
+        exec fn read_unaligned(&self, addr: u64, num_bytes: u64) -> (bytes: Result<Vec<u8>, PmemError>) {
+            unimplemented!()
+        }
+    }
+
+    impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegionV2<Perm, PMRegion>
+        where
+            Perm: CheckPermission<Seq<u8>>,
+            PMRegion: PersistentMemoryRegionV2
+    {
+        pub exec fn new(pm_region: PMRegion, Tracked(frac): Tracked<FractionalResource<PersistentMemoryRegionView, 3>>) -> (wrpm_region: Self)
+            requires
+                pm_region.inv(),
+                frac.valid(pm_region.id(), 1),
+            ensures
+                wrpm_region.inv(),
+                wrpm_region@ == frac.val(),
+                wrpm_region.constants() == pm_region.constants(),
+        {
+            Self {
+                pm_region: pm_region,
+                frac: Tracked(frac),
+                perm: None
+            }
+        }
+    }
+
     /// A `LogImpl` wraps one `UntrustedLogImpl` and one persistent
     /// memory region to provide the executable interface that turns
     /// the persistent memory region into a log.
@@ -196,10 +331,14 @@ verus! {
     /// untrusted method, along with a restricting
     /// `TrustedPermission`, to limit what it's allowed to do.
 
+    // pub struct LogImpl<PMRegion: PersistentMemoryRegionV2> {
     pub struct LogImpl<PMRegion: PersistentMemoryRegion> {
         untrusted_log_impl: UntrustedLogImpl,
         log_id: Ghost<u128>,
         wrpm_region: WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>
+        // abs: Tracked<FractionalResource<AbstractLogState, 2>>,
+        // inv: AtomicInvariant<LogInvParam, LogInvState, LogInvPred>,
+        // wrpm_region: WriteRestrictedPersistentMemoryRegionV2<TrustedPermission, PMRegion>
     }
 
     impl <PMRegion: PersistentMemoryRegion> LogImpl<PMRegion> {
@@ -207,6 +346,7 @@ verus! {
         // `UntrustedLogImpl` it wraps says it is.
         pub closed spec fn view(self) -> AbstractLogState
         {
+            // self.abs@.val()
             self.untrusted_log_impl@
         }
 
@@ -275,15 +415,19 @@ verus! {
         // initialized with `setup` and then only log operations were
         // allowed to mutate them. See `README.md` for more
         // documentation and an example of use.
+        // pub exec fn start(pm_region: PMRegion, log_id: u128, Tracked(frac): Tracked<FractionalResource<PersistentMemoryRegionView, 3>>) -> (result: Result<LogImpl<PMRegion>, LogErr>)
         pub exec fn start(pm_region: PMRegion, log_id: u128) -> (result: Result<LogImpl<PMRegion>, LogErr>)
             requires
                 pm_region.inv(),
                 UntrustedLogImpl::recover(pm_region@.flush().committed(), log_id).is_Some(),
+                // frac.valid(pm_region.id(), 2),
+                // UntrustedLogImpl::recover(frac.val().flush().committed(), log_id).is_Some(),
             ensures
                 match result {
                     Ok(trusted_log_impl) => {
                         &&& trusted_log_impl.valid()
                         &&& trusted_log_impl.constants() == pm_region.constants()
+                        // &&& Some(trusted_log_impl@) == UntrustedLogImpl::recover(frac.val().flush().committed(),
                         &&& Some(trusted_log_impl@) == UntrustedLogImpl::recover(pm_region@.flush().committed(),
                                                                                log_id)
                     },
@@ -298,8 +442,28 @@ verus! {
             // it write such that, if a crash happens in the middle,
             // it doesn't change the persistent state.
 
+            // let tracked (pm1, pm2) = frac.split(1);
+
             let ghost state = UntrustedLogImpl::recover(pm_region@.flush().committed(), log_id).get_Some_0();
             let mut wrpm_region = WriteRestrictedPersistentMemoryRegion::new(pm_region);
+/*
+            let ghost state = UntrustedLogImpl::recover(frac.val().flush().committed(), log_id).get_Some_0();
+            let mut wrpm_region = WriteRestrictedPersistentMemoryRegionV2::new(pm_region, Tracked(pm1));
+
+            let tracked abs = FractionalResource::<AbstractLogState, 2>::alloc(state);
+            let tracked (abs1, abs2) = abs.split(1);
+            let ghost inv_param = LogInvParam {
+                pm_frac_id: pm_region.id(),
+                log_frac_id: abs.id(),
+                log_id: log_id,
+            };
+            let tracked inv_state = LogInvState {
+                pm: pm2,
+                log: abs2,
+            };
+            let tracked inv = AtomicInvariant::<_, _, LogInvPred>::new(inv_param, inv_state, PMEM_INV_NS as int);
+*/
+
             let tracked perm = TrustedPermission::new_one_possibility(log_id, state);
             let untrusted_log_impl =
                 UntrustedLogImpl::start(&mut wrpm_region, log_id, Tracked(&perm), Ghost(state))?;
@@ -307,6 +471,8 @@ verus! {
                 LogImpl {
                     untrusted_log_impl,
                     log_id:  Ghost(log_id),
+                    // abs: Tracked(abs1),
+                    // inv,
                     wrpm_region
                 },
             )

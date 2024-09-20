@@ -102,14 +102,14 @@ verus! {
         //
         // Most of the conjuncts in this invariant are defined in the
         // file `inv_v.rs`. See that file for detailed explanations.
-        pub closed spec fn inv<Perm, PMRegion>(
+        pub closed spec fn inv<Perm, WRPMRegion>(
             &self,
-            wrpm_region: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+            wrpm_region: &WRPMRegion,
             log_id: u128,
         ) -> bool
             where
                 Perm: CheckPermission<Seq<u8>>,
-                PMRegion: PersistentMemoryRegion
+                WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<Perm>
         {
             &&& wrpm_region.inv() // whatever the persistent memory regions require as an invariant
             &&& no_outstanding_writes_to_metadata(wrpm_region@)
@@ -120,28 +120,28 @@ verus! {
             &&& metadata_types_set(wrpm_region@.committed())
         }
 
-        pub proof fn lemma_inv_implies_wrpm_inv<Perm, PMRegion>(
+        pub proof fn lemma_inv_implies_wrpm_inv<Perm, WRPMRegion>(
             &self,
-            wrpm_region: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+            wrpm_region: &WRPMRegion,
             log_id: u128
         )
             where
                 Perm: CheckPermission<Seq<u8>>,
-                PMRegion: PersistentMemoryRegion
+                WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<Perm>
             requires
                 self.inv(wrpm_region, log_id)
             ensures
                 wrpm_region.inv()
         {}
 
-        pub proof fn lemma_inv_implies_can_only_crash_as<Perm, PMRegion>(
+        pub proof fn lemma_inv_implies_can_only_crash_as<Perm, WRPMRegion>(
             &self,
-            wrpm_region: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+            wrpm_region: &WRPMRegion,
             log_id: u128
         )
             where
                 Perm: CheckPermission<Seq<u8>>,
-                PMRegion: PersistentMemoryRegion
+                WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<Perm>
             requires
                 self.inv(wrpm_region, log_id)
             ensures
@@ -258,14 +258,14 @@ verus! {
         // persistent memory regions `wrpm_region`. This restricts
         // how we can write `wrpm_region`. This is moot, though,
         // because we don't ever write to the memory.
-        pub exec fn start<PMRegion>(
-            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>,
+        pub exec fn start<WRPMRegion>(
+            wrpm_region: &mut WRPMRegion,
             log_id: u128,
             Tracked(perm): Tracked<&TrustedPermission>,
             Ghost(state): Ghost<AbstractLogState>,
         ) -> (result: Result<Self, LogErr>)
             where
-                PMRegion: PersistentMemoryRegion
+                WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<TrustedPermission>
             requires
                 Self::recover(old(wrpm_region)@.flush().committed(), log_id) == Some(state),
                 old(wrpm_region).inv(),
@@ -297,17 +297,15 @@ verus! {
             // regions. We check for them anyway in case that
             // assumption doesn't hold.
 
-            let pm_region = wrpm_region.get_pm_region_ref();
-
             // First, we read the corruption-detecting boolean and
             // return an error if that fails.
 
-            let cdb = read_cdb(pm_region)?;
+            let cdb = read_cdb(wrpm_region)?;
 
             // Second, we read the log variables to store in `info`.
             // If that fails, we return an error.
 
-            let info = read_log_variables(pm_region, log_id, cdb)?;
+            let info = read_log_variables(wrpm_region, log_id, cdb)?;
             proof {
                 // We have to prove that we can only crash as the given abstract
                 // state with all pending appends dropped. We prove this with two
@@ -316,11 +314,11 @@ verus! {
                 // because this is a recovered state, it's unaffected by dropping
                 // all pending appends.
                 reveal(spec_padding_needed);
-                lemma_invariants_imply_crash_recover_forall(pm_region@, log_id, cdb, info, state);
+                lemma_invariants_imply_crash_recover_forall(wrpm_region@, log_id, cdb, info, state);
                 lemma_recovered_state_is_crash_idempotent(wrpm_region@.committed(), log_id);
 
-                assert(no_outstanding_writes_to_metadata(pm_region@));
-                lemma_metadata_set_after_crash(pm_region@, cdb);
+                assert(no_outstanding_writes_to_metadata(wrpm_region@));
+                lemma_metadata_set_after_crash(wrpm_region@, cdb);
             }
             Ok(Self{ cdb, info, state: Ghost(state) })
         }
@@ -330,15 +328,15 @@ verus! {
         // It's passed a `subregion` that frames access to only that
         // log area, and only to offsets within that log area that are
         // unreachable during recovery.
-        exec fn tentatively_append_to_log<PMRegion>(
+        exec fn tentatively_append_to_log<WRPMRegion>(
             &self,
-            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>,
+            wrpm_region: &mut WRPMRegion,
             subregion: &WriteRestrictedPersistentMemorySubregion,
             bytes_to_append: &[u8],
             Tracked(perm): Tracked<&TrustedPermission>,
         ) -> (result: Result<u128, LogErr>)
             where
-                PMRegion: PersistentMemoryRegion
+                WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<TrustedPermission>
             requires
                 bytes_to_append.len() <= self.info.log_area_len - self.info.log_plus_pending_length,
                 self.info.head + self.info.log_plus_pending_length + bytes_to_append.len() <= u128::MAX,
@@ -513,15 +511,15 @@ verus! {
         // write is safe. That is, any such crash must put the memory
         // in a state that recovers as the current abstract state with
         // all pending appends dropped.
-        pub exec fn tentatively_append<PMRegion>(
+        pub exec fn tentatively_append<WRPMRegion>(
             &mut self,
-            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>,
+            wrpm_region: &mut WRPMRegion,
             bytes_to_append: &[u8],
             Ghost(log_id): Ghost<u128>,
             Tracked(perm): Tracked<&TrustedPermission>,
         ) -> (result: Result<u128, LogErr>)
             where
-                PMRegion: PersistentMemoryRegion
+                WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<TrustedPermission>
             requires
                 old(self).inv(&*old(wrpm_region), log_id),
                 forall |s| #[trigger] perm.check_permission(s) <==>
@@ -649,9 +647,9 @@ verus! {
         // `self.state`. It's passed a subregion that gives it permission
         // to do arbitrary writes to the inactive log metadata portion
         // of the persistent memory.
-        exec fn update_inactive_log_metadata<PMRegion>(
+        exec fn update_inactive_log_metadata<WRPMRegion>(
             &self,
-            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>,
+            wrpm_region: &mut WRPMRegion,
             subregion: &WriteRestrictedPersistentMemorySubregion,
             Ghost(log_id): Ghost<u128>,
             Ghost(prev_info): Ghost<LogInfo>,
@@ -659,7 +657,7 @@ verus! {
             Tracked(perm): Tracked<&TrustedPermission>,
         )
             where
-                PMRegion: PersistentMemoryRegion,
+                WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<TrustedPermission>
             requires
                 subregion.inv(old::<&mut _>(wrpm_region), perm),
                 subregion.len() == LogMetadata::spec_size_of() + u64::spec_size_of(),
@@ -747,16 +745,16 @@ verus! {
         // after the next flush, since we're going to be doing a flush.
         // This weaker requirement allows a performance optimization: the
         // caller doesn't have to flush before calling this function.
-        exec fn update_log_metadata<PMRegion>(
+        exec fn update_log_metadata<WRPMRegion>(
             &mut self,
-            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>,
+            wrpm_region: &mut WRPMRegion,
             Ghost(log_id): Ghost<u128>,
             Ghost(prev_info): Ghost<LogInfo>,
             Ghost(prev_state): Ghost<AbstractLogState>,
             Tracked(perm): Tracked<&TrustedPermission>,
         )
             where
-                PMRegion: PersistentMemoryRegion
+                WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<TrustedPermission>
             requires
                 old(wrpm_region).inv(),
                 memory_matches_deserialized_cdb(old(wrpm_region)@, old(self).cdb),
@@ -997,14 +995,14 @@ verus! {
         // in a state that recovers as either (1) the current abstract
         // state with all pending appends dropped, or (2) the abstract
         // state after all pending appends are committed.
-        pub exec fn commit<PMRegion>(
+        pub exec fn commit<WRPMRegion>(
             &mut self,
-            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>,
+            wrpm_region: &mut WRPMRegion,
             Ghost(log_id): Ghost<u128>,
             Tracked(perm): Tracked<&TrustedPermission>,
         ) -> (result: Result<(), LogErr>)
             where
-                PMRegion: PersistentMemoryRegion
+                WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<TrustedPermission>
             requires
                 old(self).inv(&*old(wrpm_region), log_id),
                 forall |s| #[trigger] perm.check_permission(s) <==> {
@@ -1137,15 +1135,15 @@ verus! {
         // state with all pending appends dropped, or (2) the state
         // after advancing the head and then dropping all pending
         // appends.
-        pub exec fn advance_head<PMRegion>(
+        pub exec fn advance_head<WRPMRegion>(
             &mut self,
-            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>,
+            wrpm_region: &mut WRPMRegion,
             new_head: u128,
             Ghost(log_id): Ghost<u128>,
             Tracked(perm): Tracked<&TrustedPermission>,
         ) -> (result: Result<(), LogErr>)
             where
-                PMRegion: PersistentMemoryRegion
+                WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<TrustedPermission>
             requires
                 old(self).inv(&*old(wrpm_region), log_id),
                 forall |s| #[trigger] perm.check_permission(s) <==> {
@@ -1319,16 +1317,16 @@ verus! {
         // containing the read bytes. It doesn't guarantee that those
         // bytes aren't corrupted by persistent memory corruption. See
         // `README.md` for more documentation and examples of its use.
-        pub exec fn read<Perm, PMRegion>(
+        pub exec fn read<Perm, WRPMRegion>(
             &self,
-            wrpm_region: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+            wrpm_region: &WRPMRegion,
             pos: u128,
             len: u64,
             Ghost(log_id): Ghost<u128>,
         ) -> (result: Result<(Vec<u8>, Ghost<Seq<int>>), LogErr>)
             where
                 Perm: CheckPermission<Seq<u8>>,
-                PMRegion: PersistentMemoryRegion,
+                WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<Perm>
             requires
                 self.inv(wrpm_region, log_id),
                 pos + len <= u128::MAX
@@ -1380,8 +1378,6 @@ verus! {
                 return Ok((Vec::<u8>::new(), Ghost(Seq::empty())));
             }
 
-            let pm_region = wrpm_region.get_pm_region_ref();
-
             let log_area_len: u64 = info.log_area_len;
             let relative_pos: u64 = (pos - info.head) as u64;
             if relative_pos >= log_area_len - info.head_log_area_offset {
@@ -1399,9 +1395,9 @@ verus! {
                 // us up and proving this optimization correct.
 
                 let addr = ABSOLUTE_POS_OF_LOG_AREA + relative_pos - (info.log_area_len - info.head_log_area_offset);
-                proof { self.lemma_read_of_continuous_range(pm_region@, log_id, pos as int,
+                proof { self.lemma_read_of_continuous_range(wrpm_region@, log_id, pos as int,
                                                             len as int, addr as int); }
-                let bytes = match pm_region.read_unaligned(addr, len) {
+                let bytes = match wrpm_region.read_unaligned(addr, len) {
                     Ok(bytes) => bytes,
                     Err(e) => {
                         assert(e == PmemError::AccessOutOfRange);
@@ -1443,9 +1439,9 @@ verus! {
 
                 // Case 2: We're reading few enough bytes that we don't have to wrap.
 
-                proof { self.lemma_read_of_continuous_range(pm_region@, log_id, pos as int,
+                proof { self.lemma_read_of_continuous_range(wrpm_region@, log_id, pos as int,
                                                             len as int, addr as int); }
-                let bytes = match pm_region.read_unaligned(addr, len) {
+                let bytes = match wrpm_region.read_unaligned(addr, len) {
                     Ok(bytes) => bytes,
                     Err(e) => {
                         assert(e == PmemError::AccessOutOfRange);
@@ -1461,11 +1457,11 @@ verus! {
             // concatenating the results.
 
             proof {
-                self.lemma_read_of_continuous_range(pm_region@, log_id, pos as int,
+                self.lemma_read_of_continuous_range(wrpm_region@, log_id, pos as int,
                                                     max_len_without_wrapping as int, addr as int);
             }
 
-            let mut part1 = match pm_region.read_unaligned(addr, max_len_without_wrapping) {
+            let mut part1 = match wrpm_region.read_unaligned(addr, max_len_without_wrapping) {
                 Ok(part1) => part1,
                 Err(e) => {
                     assert(e == PmemError::AccessOutOfRange);
@@ -1474,13 +1470,13 @@ verus! {
             };
 
             proof {
-                self.lemma_read_of_continuous_range(pm_region@, log_id,
+                self.lemma_read_of_continuous_range(wrpm_region@, log_id,
                                                     pos + max_len_without_wrapping,
                                                     len - max_len_without_wrapping,
                                                     ABSOLUTE_POS_OF_LOG_AREA as int);
             }
 
-            let mut part2 = match pm_region.read_unaligned(ABSOLUTE_POS_OF_LOG_AREA, len - max_len_without_wrapping) {
+            let mut part2 = match wrpm_region.read_unaligned(ABSOLUTE_POS_OF_LOG_AREA, len - max_len_without_wrapping) {
                 Ok(part2) => part2,
                 Err(e) => {
                     assert(e == PmemError::AccessOutOfRange);
@@ -1503,7 +1499,7 @@ verus! {
                                            |i: int| i + ABSOLUTE_POS_OF_LOG_AREA);
                 assert(true_part1 + true_part2 =~= s.log.subrange(pos - s.head, pos + len - s.head));
 
-                if !pm_region.constants().impervious_to_corruption {
+                if !wrpm_region.constants().impervious_to_corruption {
                     assert(maybe_corrupted(part1@ + part2@, true_part1 + true_part2, addrs1 + addrs2));
                     assert(all_elements_unique(addrs1 + addrs2));
                 }

@@ -13,6 +13,7 @@ use crate::log::logimpl_v::LogInfo;
 use crate::log::logspec_t::AbstractLogState;
 use crate::pmem::pmemspec_t::{extract_bytes, PersistentMemoryRegion, PmemError, spec_crc_bytes};
 use crate::pmem::pmemutil_v::{check_cdb, check_crc};
+use crate::pmem::wrpm_t::*;
 use crate::pmem::pmcopy_t::*;
 use crate::pmem::subregion_v::*;
 use crate::pmem::traits_t::size_of;
@@ -36,7 +37,7 @@ verus! {
     // to a CRC error.
     //
     // `Ok(b)` -- The CDB could be read and represents the boolean `b`.
-    pub fn read_cdb<PMRegion: PersistentMemoryRegion>(pm_region: &PMRegion) -> (result: Result<bool, LogErr>)
+    pub fn read_cdb<Perm: CheckPermission<Seq<u8>>, WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<Perm>>(pm_region: &WRPMRegion) -> (result: Result<bool, LogErr>)
         requires
             pm_region.inv(),
             recover_cdb(pm_region@.committed()).is_Some(),
@@ -112,8 +113,8 @@ verus! {
     // The region's contents aren't valid, i.e., they're not
     // recoverable to a valid log. The user must have requested to
     // start using the wrong region of persistent memory.
-    pub fn read_log_variables<PMRegion: PersistentMemoryRegion>(
-        pm_region: &PMRegion,
+    pub fn read_log_variables<Perm: CheckPermission<Seq<u8>>, WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<Perm>>(
+        pm_region: &WRPMRegion,
         log_id: u128,
         cdb: bool,
     ) -> (result: Result<LogInfo, LogErr>)
@@ -313,8 +314,6 @@ verus! {
         let log_crc_pos = if cdb { ABSOLUTE_POS_OF_LOG_CRC_FOR_CDB_TRUE }
                                     else { ABSOLUTE_POS_OF_LOG_CRC_FOR_CDB_FALSE };
         assert(log_metadata_pos == get_log_metadata_pos(cdb));
-        let subregion = PersistentMemorySubregion::new(pm_region, log_metadata_pos,
-                                                       Ghost(LogMetadata::spec_size_of() + u64::spec_size_of()));
         let ghost true_log_metadata = LogMetadata::spec_from_bytes(extract_bytes(mem, log_metadata_pos as nat, LogMetadata::spec_size_of()));
         let ghost true_crc = u64::spec_from_bytes(extract_bytes(mem, log_crc_pos as nat, u64::spec_size_of()));
         let ghost log_metadata_addrs = Seq::new(LogMetadata::spec_size_of() as nat, |i: int| log_metadata_pos + i);

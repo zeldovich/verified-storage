@@ -155,7 +155,7 @@ impl FileBackedPersistentMemoryRegion
                     -> (result: Result<Self, PmemError>)
         ensures
             match result {
-                Ok(region) => region.inv() && region@.len() == region_size,
+                Ok(region) => PersistentMemoryRegion::inv(&region) && region@.len() == region_size,
                 Err(_) => true,
             }
     {
@@ -174,7 +174,7 @@ impl FileBackedPersistentMemoryRegion
                -> (result: Result<Self, PmemError>)
         ensures
             match result {
-                Ok(region) => region.inv() && region@.len() == region_size,
+                Ok(region) => PersistentMemoryRegion::inv(&region) && region@.len() == region_size,
                 Err(_) => true,
             }
     {
@@ -184,7 +184,7 @@ impl FileBackedPersistentMemoryRegion
     pub fn restore(path: &str, region_size: u64) -> (result: Result<Self, PmemError>)
         ensures
             match result {
-                Ok(region) => region.inv() && region@.len() == region_size,
+                Ok(region) => PersistentMemoryRegion::inv(&region) && region@.len() == region_size,
                 Err(_) => true,
             }
     {
@@ -204,7 +204,7 @@ impl FileBackedPersistentMemoryRegion
             0 <= addr <= addr + len <= self@.len()
         ensures 
             match result {
-                Ok(slice) => if self.constants().impervious_to_corruption {
+                Ok(slice) => if PersistentMemoryRegion::constants(self).impervious_to_corruption {
                     slice@ == self@.committed().subrange(addr as int, addr + len)
                 } else {
                     let addrs = Seq::new(len as nat, |i: int| addr + i);
@@ -260,7 +260,7 @@ impl PersistentMemoryRegion for FileBackedPersistentMemoryRegion
         let mut maybe_corrupted_val = MaybeCorruptedBytes::new();
 
         maybe_corrupted_val.copy_from_slice(pm_slice, Ghost(true_val), Ghost(addrs),
-                                            Ghost(self.constants().impervious_to_corruption));
+                                            Ghost(PersistentMemoryRegion::constants(self).impervious_to_corruption));
         
         Ok(maybe_corrupted_val)
     }
@@ -357,6 +357,143 @@ impl PersistentMemoryRegion for FileBackedPersistentMemoryRegion
     }
 }
 
+impl PersistentMemoryRegionV2 for FileBackedPersistentMemoryRegion
+{
+    closed spec fn inv(&self) -> bool;
+
+    closed spec fn constants(&self) -> PersistentMemoryConstants;
+
+    closed spec fn id(&self) -> int;
+
+    #[verifier::external_body]
+    fn get_region_size<ResultT, Op>(&self, op: Tracked<Op>) -> (u64, Tracked<ResultT>)
+    {
+        (self.section.size as u64, arbitrary())
+    }
+
+    fn read_aligned<S, ResultT, Op>(&self, addr: u64, op: Tracked<Op>) -> (Result<MaybeCorruptedBytes<S>, PmemError>, Tracked<ResultT>)
+        where
+            S: PmCopy 
+    {
+        let pm_slice = self.get_slice_at_offset(addr, S::size_of() as u64);
+        match pm_slice {
+            Err(e) => { (Err(e), arbitrary()) },
+            Ok(pm_slice) => {
+                let ghost addrs = Seq::new(S::spec_size_of() as nat, |i: int| addr + i);
+                let ghost true_bytes = self@.committed().subrange(addr as int, addr + S::spec_size_of());
+                let ghost true_val = S::spec_from_bytes(true_bytes);
+                let mut maybe_corrupted_val = MaybeCorruptedBytes::new();
+
+                maybe_corrupted_val.copy_from_slice(pm_slice, Ghost(true_val), Ghost(addrs),
+                                                    Ghost(PersistentMemoryRegionV2::constants(self).impervious_to_corruption));
+        
+                (Ok(maybe_corrupted_val), arbitrary())
+            },
+        }
+    }
+
+    fn read_unaligned<ResultT, Op>(&self, addr: u64, num_bytes: u64, op: Tracked<Op>) -> (Result<Vec<u8>, PmemError>, Tracked<ResultT>)
+    {
+        let pm_slice = self.get_slice_at_offset(addr, num_bytes);
+        match pm_slice {
+            Err(e) => { (Err(e), arbitrary()) },
+            Ok(pm_slice) => {
+                // Allocate an unaligned buffer to copy the bytes into
+                let unaligned_buffer = copy_from_slice(pm_slice);
+
+                (Ok(unaligned_buffer), arbitrary())
+            },
+        }
+    }
+
+    #[verifier::external_body]
+    fn write<ResultT, Op>(&mut self, addr: u64, bytes: &[u8], op: Tracked<Op>) -> Tracked<ResultT>
+    {
+        // SAFETY: The `offset` method is safe as long as both the start
+        // and resulting pointer are in bounds and the computed offset does
+        // not overflow `isize`. `addr` and `num_bytes` are unsigned and
+        // the precondition requires that `addr + num_bytes` is in bounds.
+        // The precondition does not technically prevent overflowing `isize`
+        // but the value is large enough (assuming a 64-bit architecture)
+        // that we will not violate this restriction in practice.
+        // TODO: put it in the precondition anyway
+        let addr_on_pm: *mut u8 = unsafe {
+            self.section.virt_addr.offset(addr.try_into().unwrap())
+        };
+
+        // pmem_memcpy_nodrain() does a memcpy to PM with no cache line flushes or
+        // ordering; it makes no guarantees about durability. pmem_flush() does cache
+        // line flushes but does not use an ordering primitive, so updates are still
+        // not guaranteed to be durable yet.
+        // Verus doesn't like calling pmem_memcpy_nodrain directly because it returns
+        // a raw pointer, so we define a wrapper around pmem_memcpy_nodrain in deps_hack
+        // that does not return anything and call that instead
+        unsafe {
+            pmem_memcpy_nodrain_helper(
+                addr_on_pm as *mut c_void,
+                bytes.as_ptr() as *const c_void,
+                bytes.len()
+            );
+        };
+
+        arbitrary()
+    }
+
+    #[verifier::external_body]
+    #[allow(unused_variables)]
+    fn serialize_and_write<S, ResultT, Op>(&mut self, addr: u64, to_write: &S, op: Tracked<Op>) -> Tracked<ResultT>
+        where
+            S: PmCopy + Sized
+    {
+        let num_bytes: usize = S::size_of() as usize;
+
+        // SAFETY: The `offset` method is safe as long as both the start
+        // and resulting pointer are in bounds and the computed offset does
+        // not overflow `isize`. `addr` and `num_bytes` are unsigned and
+        // the precondition requires that `addr + num_bytes` is in bounds.
+        // The precondition does not technically prevent overflowing `isize`
+        // but the value is large enough (assuming a 64-bit architecture)
+        // that we will not violate this restriction in practice.
+        // TODO: put it in the precondition anyway
+        let addr_on_pm: *mut u8 = unsafe {
+            self.section.virt_addr.offset(addr.try_into().unwrap())
+        };
+
+        // convert the given &S to a pointer, then a slice of bytes
+        let s_pointer = to_write as *const S as *const u8;
+
+        // pmem_memcpy_nodrain() does a memcpy to PM with no cache line flushes or
+        // ordering; it makes no guarantees about durability. pmem_flush() does cache
+        // line flushes but does not use an ordering primitive, so updates are still
+        // not guaranteed to be durable yet.
+        // Verus doesn't like calling pmem_memcpy_nodrain directly because it returns
+        // a raw pointer, so we define a wrapper around pmem_memcpy_nodrain in deps_hack
+        // that does not return anything and call that instead
+        unsafe {
+            pmem_memcpy_nodrain_helper(
+                addr_on_pm as *mut c_void,
+                s_pointer as *const c_void,
+                num_bytes
+            );
+        };
+
+        arbitrary()
+    }
+
+    #[verifier::external_body]
+    fn flush<ResultT, Op>(&mut self, op: Tracked<Op>) -> Tracked<ResultT>
+    {
+        // `pmem_drain()` invokes an ordering primitive to drain store buffers and
+        // ensure that all cache lines that were flushed since the previous ordering
+        // primitive are durable. This guarantees that all updates made with `write`/
+        // `serialize_and_write` since the last `flush` call will be durable before
+        // any new updates become durable.
+        unsafe { pmem_drain(); };
+
+        arbitrary()
+    }
+}
+
 pub struct FileBackedPersistentMemoryRegions {
     regions: Vec<FileBackedPersistentMemoryRegion>,
 }
@@ -450,7 +587,7 @@ impl PersistentMemoryRegions for FileBackedPersistentMemoryRegions {
     #[verifier::external_body]
     fn get_region_size(&self, index: usize) -> u64
     {
-        self.regions[index].get_region_size()
+        PersistentMemoryRegion::get_region_size(&self.regions[index])
     }
 
     #[verifier::external_body]
@@ -458,19 +595,19 @@ impl PersistentMemoryRegions for FileBackedPersistentMemoryRegions {
         where
             S: PmCopy
     {
-        self.regions[index].read_aligned::<S>(addr)
+        PersistentMemoryRegion::read_aligned::<S>(&self.regions[index], addr)
     }
 
     #[verifier::external_body]
     fn read_unaligned(&self, index: usize, addr: u64, num_bytes: u64) -> (bytes: Result<Vec<u8>, PmemError>)
     {
-        self.regions[index].read_unaligned(addr, num_bytes)
+        PersistentMemoryRegion::read_unaligned(&self.regions[index], addr, num_bytes)
     }
 
     #[verifier::external_body]
     fn write(&mut self, index: usize, addr: u64, bytes: &[u8])
     {
-        self.regions[index].write(addr, bytes)
+        PersistentMemoryRegion::write(&mut self.regions[index], addr, bytes)
     }
 
     #[verifier::external_body]
@@ -478,7 +615,7 @@ impl PersistentMemoryRegions for FileBackedPersistentMemoryRegions {
         where
             S: PmCopy + Sized
     {
-        self.regions[index].serialize_and_write(addr, to_write);
+        PersistentMemoryRegion::serialize_and_write(&mut self.regions[index], addr, to_write);
     }
 
     #[verifier::external_body]

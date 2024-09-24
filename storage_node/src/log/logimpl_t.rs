@@ -370,9 +370,7 @@ verus! {
                 r.update_mut(r.val().write(self.addr() as int, self.bytes()));
                 inner.pm = r.split_mut(1);
 
-                // XXX seems like this is just a rewrite, but Verus doesn't see it..
-                assert(forall |s| r.val().can_crash_as(s) ==> #[trigger] self.perm.check_permission(s));
-                assert(forall |s| r.val().can_crash_as(s) ==> #[trigger] recover_into(s, mself.loginv.constant().log_id, inner.crash.val()));
+                assert forall |s| self.perm.check_permission(s) implies #[trigger] recover_into(s, mself.loginv.constant().log_id, inner.crash.val()) by {};
             });
             WriteResult{
                 frac: r.split_mut(1)
@@ -731,6 +729,8 @@ verus! {
                         state2: self@.commit().drop_pending_appends(),
                     });
                     inner.crash = abs.split_mut(1);
+
+                    assert forall |s| recover_into(s, self.inv@.constant().log_id, AbstractLogCrashState{ state1: self@.drop_pending_appends(), state2: self@.drop_pending_appends() }) implies #[trigger] recover_into(s, self.inv@.constant().log_id, AbstractLogCrashState{ state1: self@.drop_pending_appends(), state2: self@.commit().drop_pending_appends() }) by {};
                 });
             };
             let tracked perm = TrustedPermission::new_two_possibilities(abs, self.log_id@, self@.drop_pending_appends(),
@@ -800,6 +800,8 @@ verus! {
                         state2: self@.advance_head(new_head as int).drop_pending_appends(),
                     });
                     inner.crash = abs.split_mut(1);
+
+                    assert forall |s| recover_into(s, self.inv@.constant().log_id, AbstractLogCrashState{ state1: self@.drop_pending_appends(), state2: self@.drop_pending_appends() }) implies #[trigger] recover_into(s, self.inv@.constant().log_id, AbstractLogCrashState{ state1: self@.drop_pending_appends(), state2: self@.advance_head(new_head as int).drop_pending_appends() }) by {};
                 });
             };
             let tracked perm = TrustedPermission::new_two_possibilities(

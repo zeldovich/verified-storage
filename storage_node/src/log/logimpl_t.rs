@@ -382,7 +382,10 @@ verus! {
             self.addr() + self.bytes().len() <= u64::MAX &&
             self.frac.val().no_outstanding_writes_in_range(self.addr() as int, self.addr() + self.bytes().len()) &&
             self.loginv.namespace() == PMEM_INV_NS &&
-            self.loginv.constant().pm_frac_id == self.frac.id()
+            self.loginv.constant().pm_frac_id == self.frac.id() &&
+            self.loginv.constant().log_frac_id == self.perm.inv.constant().log_frac_id &&
+            forall |s| self.frac.val().write(self.addr() as int, self.bytes()).can_crash_as(s)
+                  ==> #[trigger] self.perm.check_permission(s)
         }
         closed spec fn post(&self, r: WriteResult) -> bool {
             r.frac.valid(self.frac.id(), 1) &&
@@ -409,8 +412,9 @@ verus! {
                 use_type_invariant(mself.perm);
                 open_atomic_invariant!(credit1 => &mself.perm.inv => perminner => {
                     inner.log.combine_mut(perminner.log);
-                    // XXX what's the new abstract log state?
-                    inner.log.update_mut(inner.log.val());
+
+                    inner.log.update_mut(UntrustedLogImpl::recover(r.val(), self.perm.log_id).unwrap());
+
                     perminner.log = inner.log.split_mut(1);
                 });
             });
@@ -448,9 +452,11 @@ verus! {
             result
         }
 
-        #[verifier::external_body]
         exec fn write(&mut self, addr: u64, bytes: &[u8], perm: Tracked<&Perm>) {
-            unimplemented!()
+            let tracked op = WRPMWriteUnaligned{
+            };
+            let (result, Tracked(opres)) = self.pm_region.write::<_, WRPMWriteUnaligned>(addr, bytes, Tracked(op));
+            result
         }
 
         #[verifier::external_body]

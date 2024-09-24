@@ -142,6 +142,7 @@ pub trait WriteRestrictedPersistentMemoryRegionTrait<Perm> where Perm: CheckPerm
     spec fn view(&self) -> PersistentMemoryRegionView;
     spec fn inv(&self) -> bool;
     spec fn constants(&self) -> PersistentMemoryConstants;
+    spec fn validperm(&self, p: &Perm) -> bool;
 
     // This executable function is the only way to perform a write, and
     // it requires the caller to supply permission authorizing the
@@ -151,6 +152,7 @@ pub trait WriteRestrictedPersistentMemoryRegionTrait<Perm> where Perm: CheckPerm
     exec fn write(&mut self, addr: u64, bytes: &[u8], perm: Tracked<&Perm>)
         requires
             old(self).inv(),
+            old(self).validperm(perm@),
             addr + bytes@.len() <= old(self)@.len(),
             addr + bytes@.len() <= u64::MAX,
             old(self)@.no_outstanding_writes_in_range(addr as int, addr + bytes@.len()),
@@ -278,6 +280,11 @@ impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegionTrait<Perm> for WriteR
     closed spec fn constants(&self) -> PersistentMemoryConstants
     {
         self.pm_region.constants()
+    }
+
+    open spec fn validperm(&self, p: &Perm) -> bool
+    {
+        true
     }
 
     // This executable function is the only way to perform a write, and

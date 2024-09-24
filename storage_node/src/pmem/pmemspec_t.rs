@@ -409,7 +409,6 @@ verus! {
     }
 
     pub const PMEM_INV_NS: u64 = 12345;
-    pub const PMEM_APP_INV_NS: u64 = 12346;
 
     pub trait PMRegionGetSizeOperation<ResultT> where Self: Sized {
         spec fn id(&self) -> int;
@@ -548,8 +547,7 @@ verus! {
             opens_invariants
                 [ PMEM_INV_NS ];
         proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 3>,
-                       tracked credit0: OpenInvariantCredit,
-                       tracked credit1: OpenInvariantCredit) -> (tracked result: ResultT)
+                       tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
             requires
                 self.pre(),
                 old(r).valid(self.id(), 1),
@@ -558,7 +556,7 @@ verus! {
                 r.val() == old(r).val().write(self.addr() as int, self.bytes()),
                 self.post(result),
             opens_invariants
-                [ PMEM_INV_NS, PMEM_APP_INV_NS ];
+                [ PMEM_INV_NS ];
     }
 
     pub trait PMRegionSerializeAndWriteOperation<S, ResultT> where S: PmCopy, Self: Sized {
@@ -652,6 +650,7 @@ verus! {
             ensures
                 self.inv(),
                 self.constants() == old(self).constants(),
+                self.id() == old(self).id(),
                 op.post(result@),
         ;
 
@@ -665,6 +664,7 @@ verus! {
             ensures
                 self.inv(),
                 self.constants() == old(self).constants(),
+                self.id() == old(self).id(),
                 op.post(result@),
         ;
 
@@ -695,6 +695,7 @@ verus! {
             ensures
                 self.inv(),
                 self.constants() == old(self).constants(),
+                self.id() == old(self).id(),
                 op.post(result@),
         ;
     }

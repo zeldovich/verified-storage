@@ -38,6 +38,7 @@
 //! method, and demand that the method preserve that invariant.
 
 use std::fmt::Write;
+use std::sync::Arc;
 
 use crate::log::logimpl_v::UntrustedLogImpl;
 use crate::log::logspec_t::AbstractLogState;
@@ -107,62 +108,44 @@ verus! {
     // So untrusted code in other files can't create one, and we can
     // rely on it to restrict access to persistent memory.
 
-    pub struct PermInvParam {
-        ghost log_frac_id: int,
-        ghost state1: AbstractLogState,
-        ghost state2: AbstractLogState,
-    }
-
-    pub struct PermInvState {
-        log: FractionalResource<AbstractLogState, 2>,
-    }
-
-    pub struct PermInvPred {}
-
-    impl InvariantPredicate<PermInvParam, PermInvState> for PermInvPred {
-        closed spec fn inv(k: PermInvParam, v: PermInvState) -> bool {
-            v.log.valid(k.log_frac_id, 1) &&
-            (v.log.val() == k.state1 || v.log.val() == k.state2)
-        }
+    pub struct AbstractLogCrashState {
+        state1: AbstractLogState,
+        state2: AbstractLogState,
     }
 
     #[allow(dead_code)]
     pub struct TrustedPermission {
         ghost log_id: u128,
-        tracked inv: AtomicInvariant<PermInvParam, PermInvState, PermInvPred>,
+        tracked frac: FractionalResource<AbstractLogCrashState, 2>,
+    }
+
+    closed spec fn recover_into(s: Seq<u8>, log_id: u128, crash: AbstractLogCrashState) -> bool {
+        UntrustedLogImpl::recover(s, log_id) == Some(crash.state1) ||
+        UntrustedLogImpl::recover(s, log_id) == Some(crash.state2)
     }
 
     impl CheckPermission<Seq<u8>> for TrustedPermission {
         closed spec fn check_permission(&self, state: Seq<u8>) -> bool {
-            ||| UntrustedLogImpl::recover(state, self.log_id) == Some(self.inv.constant().state1)
-            ||| UntrustedLogImpl::recover(state, self.log_id) == Some(self.inv.constant().state2)
+            recover_into(state, self.log_id, self.frac.val())
         }
     }
 
-    pub const LOG_INV_NS: u64 = PMEM_APP_INV_NS;
-
     impl TrustedPermission {
-
-        #[verifier::type_invariant]
-        pub closed spec fn type_inv(self) -> bool {
-            self.inv.namespace() == LOG_INV_NS
-        }
 
         // This is one of two constructors for `TrustedPermission`.
         // It conveys permission to do any update as long as a
         // subsequent crash and recovery can only lead to given
         // abstract state `state`.
-        proof fn new_one_possibility(tracked frac: FractionalResource<AbstractLogState, 2>,
+        proof fn new_one_possibility(tracked frac: FractionalResource<AbstractLogCrashState, 2>,
                                      log_id: u128,
                                      state: AbstractLogState) -> (tracked perm: Self)
             requires
                 frac.inv(),
                 frac.frac() == 1,
-                frac.val() == state,
+                frac.val().state1 == state,
+                frac.val().state2 == state,
             ensures
-                perm.inv.constant().log_frac_id == frac.id(),
-                perm.inv.constant().state1 == state,
-                perm.inv.constant().state2 == state,
+                perm.frac == frac,
                 forall |s| #[trigger] perm.check_permission(s) <==>
                     UntrustedLogImpl::recover(s, log_id) == Some(state)
         {
@@ -175,7 +158,7 @@ verus! {
         // lead to one of two given abstract states `state1` and
         // `state2`.
         proof fn new_two_possibilities(
-            tracked frac: FractionalResource<AbstractLogState, 2>,
+            tracked frac: FractionalResource<AbstractLogCrashState, 2>,
             log_id: u128,
             state1: AbstractLogState,
             state2: AbstractLogState
@@ -183,42 +166,20 @@ verus! {
             requires
                 frac.inv(),
                 frac.frac() == 1,
-                (frac.val() == state1 || frac.val() == state2),
+                frac.val().state1 == state1,
+                frac.val().state2 == state2,
             ensures
-                perm.inv.constant().log_frac_id == frac.id(),
-                perm.inv.constant().state1 == state1,
-                perm.inv.constant().state2 == state2,
+                perm.frac == frac,
                 forall |s| #[trigger] perm.check_permission(s) <==> {
                     ||| UntrustedLogImpl::recover(s, log_id) == Some(state1)
                     ||| UntrustedLogImpl::recover(s, log_id) == Some(state2)
                 }
         {
-            let ghost iparam = PermInvParam {
-                log_frac_id: frac.id(),
-                state1: state1,
-                state2: state2,
-            };
-            let tracked istate = PermInvState {
-                log: frac,
-            };
-            let tracked inv = AtomicInvariant::<_, _, PermInvPred>::new(iparam, istate, LOG_INV_NS as int);
-            let tracked res = Self {
+            Self {
                 log_id: log_id,
-                inv: inv,
-            };
-            res
+                frac: frac,
+            }
         }
-
-        proof fn reclaim(tracked self) -> (tracked frac: FractionalResource<AbstractLogState, 2>)
-            ensures
-                frac.valid(self.inv.constant().log_frac_id, 1) &&
-                ( frac.val() == self.inv.constant().state1 ||
-                  frac.val() == self.inv.constant().state2 )
-            opens_invariants any
-        {
-            self.inv.into_inner().log
-        }
-
     }
 
     // This enumeration represents the various errors that can be
@@ -254,13 +215,13 @@ verus! {
         // State of the persistent memory from PersistentMemoryRegion.
         pm: FractionalResource<PersistentMemoryRegionView, 3>,
 
-        // State of the abstract log.
-        log: FractionalResource<AbstractLogState, 2>,
+        // State of the abstract log on crash.
+        crash: FractionalResource<AbstractLogCrashState, 2>,
     }
 
     pub struct LogInvParam {
         pub pm_frac_id: int,
-        pub log_frac_id: int,
+        pub crash_frac_id: int,
         pub log_id: u128,
     }
 
@@ -269,20 +230,19 @@ verus! {
     impl InvariantPredicate<LogInvParam, LogInvState> for LogInvPred {
         closed spec fn inv(k: LogInvParam, v: LogInvState) -> bool {
             v.pm.valid(k.pm_frac_id, 1) &&
-            v.log.valid(k.log_frac_id, 1) &&
-            UntrustedLogImpl::recover(v.pm.val().flush().committed(), k.log_id) == Some(v.log.val())
+            v.crash.valid(k.crash_frac_id, 1) &&
+            forall |s| v.pm.val().can_crash_as(s) ==> #[trigger] recover_into(s, k.log_id, v.crash.val())
         }
     }
 
     #[allow(dead_code)]
-    pub struct WriteRestrictedPersistentMemoryRegionV2<Perm, PMRegion>
+    pub struct WriteRestrictedPersistentMemoryRegionV2<PMRegion>
         where
-            Perm: CheckPermission<Seq<u8>>,
             PMRegion: PersistentMemoryRegionV2
     {
         pm_region: PMRegion,
         frac: Tracked<FractionalResource<PersistentMemoryRegionView, 3>>,
-        ghost perm: Option<Perm>, // Needed to work around Rust limitation that Perm must be referenced
+        inv: Tracked<Arc<AtomicInvariant<LogInvParam, LogInvState, LogInvPred>>>,
     }
 
     pub struct EmptyResult {}
@@ -364,11 +324,11 @@ verus! {
     }
 
     pub struct WRPMWriteUnaligned<'a> {
-        addr: u64,
-        bytes: Seq<u8>,
-        frac: FractionalResource<PersistentMemoryRegionView, 3>,
-        loginv: &'a AtomicInvariant<LogInvParam, LogInvState, LogInvPred>,
-        perm: &'a TrustedPermission,
+        ghost addr: u64,
+        ghost bytes: Seq<u8>,
+        tracked frac: FractionalResource<PersistentMemoryRegionView, 3>,
+        tracked loginv: &'a AtomicInvariant<LogInvParam, LogInvState, LogInvPred>,
+        tracked perm: &'a TrustedPermission,
     }
 
     impl PMRegionWriteOperation<WriteResult> for WRPMWriteUnaligned<'_> {
@@ -383,7 +343,8 @@ verus! {
             self.frac.val().no_outstanding_writes_in_range(self.addr() as int, self.addr() + self.bytes().len()) &&
             self.loginv.namespace() == PMEM_INV_NS &&
             self.loginv.constant().pm_frac_id == self.frac.id() &&
-            self.loginv.constant().log_frac_id == self.perm.inv.constant().log_frac_id &&
+            self.perm.frac.valid(self.loginv.constant().crash_frac_id, 1) &&
+            self.perm.log_id == self.loginv.constant().log_id &&
             forall |s| self.frac.val().write(self.addr() as int, self.bytes()).can_crash_as(s)
                   ==> #[trigger] self.perm.check_permission(s)
         }
@@ -399,24 +360,19 @@ verus! {
         }
 
         proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 3>,
-                       tracked credit0: OpenInvariantCredit,
-                       tracked credit1: OpenInvariantCredit) -> (tracked result: WriteResult)
+                       tracked credit: OpenInvariantCredit) -> (tracked result: WriteResult)
         {
             let tracked mut mself = self;
             r.combine_mut(mself.frac);
-            open_atomic_invariant!(credit0 => &mself.loginv => inner => {
+            open_atomic_invariant!(credit => &mself.loginv => inner => {
+                inner.crash.agree(&mself.perm.frac);
                 r.combine_mut(inner.pm);
                 r.update_mut(r.val().write(self.addr() as int, self.bytes()));
                 inner.pm = r.split_mut(1);
 
-                use_type_invariant(mself.perm);
-                open_atomic_invariant!(credit1 => &mself.perm.inv => perminner => {
-                    inner.log.combine_mut(perminner.log);
-
-                    inner.log.update_mut(UntrustedLogImpl::recover(r.val(), self.perm.log_id).unwrap());
-
-                    perminner.log = inner.log.split_mut(1);
-                });
+                // XXX seems like this is just a rewrite, but Verus doesn't see it..
+                assert(forall |s| r.val().can_crash_as(s) ==> #[trigger] self.perm.check_permission(s));
+                assert(forall |s| r.val().can_crash_as(s) ==> #[trigger] recover_into(s, mself.loginv.constant().log_id, inner.crash.val()));
             });
             WriteResult{
                 frac: r.split_mut(1)
@@ -424,9 +380,8 @@ verus! {
         }
     }
 
-    impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegionTrait<Perm> for WriteRestrictedPersistentMemoryRegionV2<Perm, PMRegion>
+    impl<PMRegion> WriteRestrictedPersistentMemoryRegionTrait<TrustedPermission> for WriteRestrictedPersistentMemoryRegionV2<PMRegion>
         where
-            Perm: CheckPermission<Seq<u8>>,
             PMRegion: PersistentMemoryRegionV2
     {
         closed spec fn view(&self) -> PersistentMemoryRegionView
@@ -437,12 +392,20 @@ verus! {
         closed spec fn inv(&self) -> bool
         {
             self.pm_region.inv() &&
-            self.frac@.valid(self.pm_region.id(), 1)
+            self.frac@.valid(self.pm_region.id(), 1) &&
+            self.inv@.namespace() == PMEM_INV_NS &&
+            self.inv@.constant().pm_frac_id == self.pm_region.id()
         }
 
         closed spec fn constants(&self) -> PersistentMemoryConstants
         {
             self.pm_region.constants()
+        }
+
+        closed spec fn validperm(&self, p: &TrustedPermission) -> bool
+        {
+            p.frac.valid(self.inv@.constant().crash_frac_id, 1) &&
+            p.log_id == self.inv@.constant().log_id
         }
 
         exec fn get_region_size(&self) -> (result: u64)
@@ -452,15 +415,24 @@ verus! {
             result
         }
 
-        exec fn write(&mut self, addr: u64, bytes: &[u8], perm: Tracked<&Perm>) {
-            let tracked op = WRPMWriteUnaligned{
+        exec fn write(&mut self, addr: u64, bytes: &[u8], Tracked(perm): Tracked<&TrustedPermission>) {
+            let tracked mut frac = FractionalResource::<PersistentMemoryRegionView, 3>::default();
+            proof {
+                tracked_swap(self.frac.borrow_mut(), &mut frac);
             };
-            let (result, Tracked(opres)) = self.pm_region.write::<_, WRPMWriteUnaligned>(addr, bytes, Tracked(op));
-            result
+            let tracked op = WRPMWriteUnaligned{
+                addr: addr,
+                bytes: bytes@,
+                frac: frac,
+                loginv: self.inv.borrow(),
+                perm: perm,
+            };
+            let Tracked(opres) = self.pm_region.write::<_, WRPMWriteUnaligned>(addr, bytes, Tracked(op));
+            self.frac = Tracked(opres.frac);
         }
 
         #[verifier::external_body]
-        exec fn serialize_and_write<S>(&mut self, addr: u64, to_write: &S, perm: Tracked<&Perm>) {
+        exec fn serialize_and_write<S>(&mut self, addr: u64, to_write: &S, perm: Tracked<&TrustedPermission>) {
             unimplemented!()
         }
 
@@ -484,15 +456,18 @@ verus! {
         }
     }
 
-    impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegionV2<Perm, PMRegion>
+    impl<PMRegion> WriteRestrictedPersistentMemoryRegionV2<PMRegion>
         where
-            Perm: CheckPermission<Seq<u8>>,
             PMRegion: PersistentMemoryRegionV2
     {
-        pub exec fn new(pm_region: PMRegion, Tracked(frac): Tracked<FractionalResource<PersistentMemoryRegionView, 3>>) -> (wrpm_region: Self)
+        pub exec fn new(pm_region: PMRegion,
+                        Tracked(frac): Tracked<FractionalResource<PersistentMemoryRegionView, 3>>,
+                        Tracked(inv): Tracked<Arc<AtomicInvariant<LogInvParam, LogInvState, LogInvPred>>>) -> (wrpm_region: Self)
             requires
                 pm_region.inv(),
                 frac.valid(pm_region.id(), 1),
+                inv.namespace() == PMEM_INV_NS,
+                inv.constant().pm_frac_id == pm_region.id(),
             ensures
                 wrpm_region.inv(),
                 wrpm_region@ == frac.val(),
@@ -501,7 +476,7 @@ verus! {
             Self {
                 pm_region: pm_region,
                 frac: Tracked(frac),
-                perm: None
+                inv: Tracked(inv),
             }
         }
     }
@@ -526,8 +501,8 @@ verus! {
         untrusted_log_impl: UntrustedLogImpl,
         log_id: Ghost<u128>,
         wrpm_region: WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>,
-        abs: Tracked<FractionalResource<AbstractLogState, 2>>,
-        // inv: AtomicInvariant<LogInvParam, LogInvState, LogInvPred>,
+        abs: Tracked<FractionalResource<AbstractLogCrashState, 2>>,
+        inv: Tracked<Arc<AtomicInvariant<LogInvParam, LogInvState, LogInvPred>>>,
         // wrpm_region: WriteRestrictedPersistentMemoryRegionV2<TrustedPermission, PMRegion>
     }
 
@@ -563,8 +538,8 @@ verus! {
         pub closed spec fn valid(self) -> bool {
             &&& self.untrusted_log_impl.inv(&self.wrpm_region, self.log_id@)
             &&& can_only_crash_as_state(self.wrpm_region@, self.log_id@, self@.drop_pending_appends())
-            &&& self.abs@.inv()
-            &&& self.abs@.frac() == 1
+            &&& self.abs@.valid(self.inv@.constant().crash_frac_id, 1)
+            &&& self.abs@.val() == AbstractLogCrashState{ state1: self@.drop_pending_appends(), state2: self@.drop_pending_appends() }
         }
 
         // The `setup` method sets up persistent memory regions
@@ -634,40 +609,43 @@ verus! {
             // it write such that, if a crash happens in the middle,
             // it doesn't change the persistent state.
 
-            // let tracked (pm1, pm2) = frac.split(1);
-
             let ghost state = UntrustedLogImpl::recover(pm_region@.flush().committed(), log_id).get_Some_0();
-            let mut wrpm_region = WriteRestrictedPersistentMemoryRegion::new(pm_region);
-/*
-            let ghost state = UntrustedLogImpl::recover(frac.val().flush().committed(), log_id).get_Some_0();
-            let mut wrpm_region = WriteRestrictedPersistentMemoryRegionV2::new(pm_region, Tracked(pm1));
-*/
 
-            let tracked abs = FractionalResource::<AbstractLogState, 2>::alloc(state);
+            let tracked abs = FractionalResource::<AbstractLogCrashState, 2>::alloc(AbstractLogCrashState{
+                state1: state,
+                state2: state,
+            });
             let tracked (abs1, abs2) = abs.split(1);
-/*
+
+            // XXX use start() function parameter instead
+            let tracked frac = FractionalResource::<PersistentMemoryRegionView, 3>::alloc(PersistentMemoryRegionView{state: seq![]});
+            let tracked (pm1, pm2) = frac.split(1);
+
+            let mut wrpm_region = WriteRestrictedPersistentMemoryRegion::new(pm_region);
+            // let mut wrpm_region = WriteRestrictedPersistentMemoryRegionV2::new(pm_region, Tracked(pm1));
+
             let ghost inv_param = LogInvParam {
-                pm_frac_id: pm_region.id(),
-                log_frac_id: abs.id(),
+                // pm_frac_id: pm_region.id(),
+                pm_frac_id: 0,
+                crash_frac_id: abs.id(),
                 log_id: log_id,
             };
             let tracked inv_state = LogInvState {
                 pm: pm2,
-                log: abs2,
+                crash: abs2,
             };
             let tracked inv = AtomicInvariant::<_, _, LogInvPred>::new(inv_param, inv_state, PMEM_INV_NS as int);
-*/
+            let tracked inv = Arc::new(inv);
 
             let tracked perm = TrustedPermission::new_one_possibility(abs1, log_id, state);
             let untrusted_log_impl =
                 UntrustedLogImpl::start(&mut wrpm_region, log_id, Tracked(&perm), Ghost(state))?;
-            let tracked abs1 = perm.reclaim();
             Ok(
                 LogImpl {
                     untrusted_log_impl,
                     log_id:  Ghost(log_id),
-                    abs: Tracked(abs1),
-                    // inv,
+                    abs: Tracked(perm.frac),
+                    inv: Tracked(inv),
                     wrpm_region
                 },
             )
@@ -706,14 +684,15 @@ verus! {
             // such that, if a crash happens in the middle of a write,
             // the view of the persistent state is the current
             // state with pending appends dropped.
-            let tracked mut abs = FractionalResource::<AbstractLogState, 2>::default();
+            let tracked mut abs = FractionalResource::<AbstractLogCrashState, 2>::default();
             proof {
                 tracked_swap(self.abs.borrow_mut(), &mut abs);
             };
             let tracked perm = TrustedPermission::new_one_possibility(abs, self.log_id@, self@.drop_pending_appends());
             let res = self.untrusted_log_impl.tentatively_append(&mut self.wrpm_region, bytes_to_append,
                                                                  self.log_id, Tracked(&perm));
-            self.abs = Tracked(perm.reclaim());
+            // XXX update abs state
+            self.abs = Tracked(perm.frac);
             res
         }
 
@@ -740,14 +719,36 @@ verus! {
             // the view of the persistent state is either the current
             // state with all pending appends dropped or the current
             // state with all uncommitted appends committed.
-            let tracked mut abs = FractionalResource::<AbstractLogState, 2>::default();
+            let tracked mut abs = FractionalResource::<AbstractLogCrashState, 2>::default();
+            let Tracked(credit) = create_open_invariant_credit();
             proof {
                 tracked_swap(self.abs.borrow_mut(), &mut abs);
+
+                open_atomic_invariant!(credit => self.inv.borrow() => inner => {
+                    abs.combine_mut(inner.crash);
+                    abs.update_mut(AbstractLogCrashState{
+                        state1: self@.drop_pending_appends(),
+                        state2: self@.commit().drop_pending_appends(),
+                    });
+                    inner.crash = abs.split_mut(1);
+                });
             };
             let tracked perm = TrustedPermission::new_two_possibilities(abs, self.log_id@, self@.drop_pending_appends(),
                                                                         self@.commit().drop_pending_appends());
             let res = self.untrusted_log_impl.commit(&mut self.wrpm_region, self.log_id, Tracked(&perm));
-            self.abs = Tracked(perm.reclaim());
+            let tracked mut abs = perm.frac;
+            let Tracked(credit) = create_open_invariant_credit();
+            proof {
+                open_atomic_invariant!(credit => self.inv.borrow() => inner => {
+                    abs.combine_mut(inner.crash);
+                    abs.update_mut(AbstractLogCrashState{
+                        state1: self@.drop_pending_appends(),
+                        state2: self@.drop_pending_appends(),
+                    });
+                    inner.crash = abs.split_mut(1);
+                });
+            };
+            self.abs = Tracked(abs);
             res
         }
 
@@ -787,9 +788,19 @@ verus! {
             // such that, if a crash happens in the middle of a write,
             // the view of the persistent state is either the current
             // state or the current state with the head advanced.
-            let tracked mut abs = FractionalResource::<AbstractLogState, 2>::default();
+            let tracked mut abs = FractionalResource::<AbstractLogCrashState, 2>::default();
+            let Tracked(credit) = create_open_invariant_credit();
             proof {
                 tracked_swap(self.abs.borrow_mut(), &mut abs);
+
+                open_atomic_invariant!(credit => self.inv.borrow() => inner => {
+                    abs.combine_mut(inner.crash);
+                    abs.update_mut(AbstractLogCrashState{
+                        state1: self@.drop_pending_appends(),
+                        state2: self@.advance_head(new_head as int).drop_pending_appends(),
+                    });
+                    inner.crash = abs.split_mut(1);
+                });
             };
             let tracked perm = TrustedPermission::new_two_possibilities(
                 abs,
@@ -799,7 +810,19 @@ verus! {
             );
             let res = self.untrusted_log_impl.advance_head(&mut self.wrpm_region, new_head,
                                                            self.log_id, Tracked(&perm));
-            self.abs = Tracked(perm.reclaim());
+            let tracked mut abs = perm.frac;
+            let Tracked(credit) = create_open_invariant_credit();
+            proof {
+                open_atomic_invariant!(credit => self.inv.borrow() => inner => {
+                    abs.combine_mut(inner.crash);
+                    abs.update_mut(AbstractLogCrashState{
+                        state1: self@.drop_pending_appends(),
+                        state2: self@.drop_pending_appends(),
+                    });
+                    inner.crash = abs.split_mut(1);
+                });
+            };
+            self.abs = Tracked(abs);
             res
         }
 

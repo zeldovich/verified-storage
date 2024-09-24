@@ -494,17 +494,15 @@ verus! {
     /// untrusted method, along with a restricting
     /// `TrustedPermission`, to limit what it's allowed to do.
 
-    // pub struct LogImpl<PMRegion: PersistentMemoryRegionV2> {
-    pub struct LogImpl<PMRegion: PersistentMemoryRegion> {
+    pub struct LogImpl<PMRegion: PersistentMemoryRegionV2> {
         untrusted_log_impl: UntrustedLogImpl,
         log_id: Ghost<u128>,
-        wrpm_region: WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>,
+        wrpm_region: WriteRestrictedPersistentMemoryRegionV2<PMRegion>,
         abs: Tracked<FractionalResource<AbstractLogCrashState, 2>>,
         inv: Tracked<Arc<AtomicInvariant<LogInvParam, LogInvState, LogInvPred>>>,
-        // wrpm_region: WriteRestrictedPersistentMemoryRegionV2<TrustedPermission, PMRegion>
     }
 
-    impl <PMRegion: PersistentMemoryRegion> LogImpl<PMRegion> {
+    impl <PMRegion: PersistentMemoryRegionV2> LogImpl<PMRegion> {
         // The view of a `LogImpl` is whatever the
         // `UntrustedLogImpl` it wraps says it is.
         pub closed spec fn view(self) -> AbstractLogState
@@ -540,6 +538,7 @@ verus! {
             &&& self.abs@.val() == AbstractLogCrashState{ state1: self@.drop_pending_appends(), state2: self@.drop_pending_appends() }
         }
 
+/*
         // The `setup` method sets up persistent memory regions
         // `pm_region` to store an initial empty log. It returns a
         // vector listing the capacity of the log as well as a
@@ -574,27 +573,25 @@ verus! {
             let capacities = UntrustedLogImpl::setup(pm_region, log_id)?;
             Ok((capacities, log_id))
         }
+*/
 
         // The `start` method creates an `UntrustedLogImpl` out of a
         // persistent memory region. It's assumed that the region was
         // initialized with `setup` and then only log operations were
         // allowed to mutate them. See `README.md` for more
         // documentation and an example of use.
-        // pub exec fn start(pm_region: PMRegion, log_id: u128, Tracked(frac): Tracked<FractionalResource<PersistentMemoryRegionView, 3>>) -> (result: Result<LogImpl<PMRegion>, LogErr>)
-        pub exec fn start(pm_region: PMRegion, log_id: u128) -> (result: Result<LogImpl<PMRegion>, LogErr>)
+        pub exec fn start(pm_region: PMRegion, log_id: u128, Tracked(frac): Tracked<FractionalResource<PersistentMemoryRegionView, 3>>) -> (result: Result<LogImpl<PMRegion>, LogErr>)
             requires
                 pm_region.inv(),
-                UntrustedLogImpl::recover(pm_region@.flush().committed(), log_id).is_Some(),
-                // frac.valid(pm_region.id(), 2),
-                // UntrustedLogImpl::recover(frac.val().flush().committed(), log_id).is_Some(),
+                frac.valid(pm_region.id(), 2),
+                UntrustedLogImpl::recover(frac.val().flush().committed(), log_id).is_Some(),
             ensures
                 match result {
                     Ok(trusted_log_impl) => {
                         &&& trusted_log_impl.valid()
                         &&& trusted_log_impl.constants() == pm_region.constants()
-                        // &&& Some(trusted_log_impl@) == UntrustedLogImpl::recover(frac.val().flush().committed(),
-                        &&& Some(trusted_log_impl@) == UntrustedLogImpl::recover(pm_region@.flush().committed(),
-                                                                               log_id)
+                        &&& Some(trusted_log_impl@) == UntrustedLogImpl::recover(frac.val().flush().committed(),
+                                                                                 log_id)
                     },
                     Err(LogErr::CRCMismatch) => !pm_region.constants().impervious_to_corruption,
                     Err(e) => e == LogErr::PmemErr{ err: PmemError::AccessOutOfRange },
@@ -607,24 +604,17 @@ verus! {
             // it write such that, if a crash happens in the middle,
             // it doesn't change the persistent state.
 
-            let ghost state = UntrustedLogImpl::recover(pm_region@.flush().committed(), log_id).get_Some_0();
+            let ghost state = UntrustedLogImpl::recover(frac.val().flush().committed(), log_id).get_Some_0();
 
             let tracked abs = FractionalResource::<AbstractLogCrashState, 2>::alloc(AbstractLogCrashState{
                 state1: state,
                 state2: state,
             });
             let tracked (abs1, abs2) = abs.split(1);
-
-            // XXX use start() function parameter instead
-            let tracked frac = FractionalResource::<PersistentMemoryRegionView, 3>::alloc(PersistentMemoryRegionView{state: seq![]});
             let tracked (pm1, pm2) = frac.split(1);
 
-            let mut wrpm_region = WriteRestrictedPersistentMemoryRegion::new(pm_region);
-            // let mut wrpm_region = WriteRestrictedPersistentMemoryRegionV2::new(pm_region, Tracked(pm1));
-
             let ghost inv_param = LogInvParam {
-                // pm_frac_id: pm_region.id(),
-                pm_frac_id: 0,
+                pm_frac_id: pm_region.id(),
                 crash_frac_id: abs.id(),
                 log_id: log_id,
             };
@@ -634,6 +624,8 @@ verus! {
             };
             let tracked inv = AtomicInvariant::<_, _, LogInvPred>::new(inv_param, inv_state, PMEM_INV_NS as int);
             let tracked inv = Arc::new(inv);
+
+            let mut wrpm_region = WriteRestrictedPersistentMemoryRegionV2::new(pm_region, Tracked(pm1), Tracked(inv));
 
             let tracked perm = TrustedPermission::new_one_possibility(abs1, log_id, state);
             let untrusted_log_impl =
@@ -746,6 +738,10 @@ verus! {
                         state2: self@.drop_pending_appends(),
                     });
                     inner.crash = abs.split_mut(1);
+
+                    inner.pm.agree(self.wrpm_region.frac.borrow());
+                    assert(self.wrpm_region@ == inner.pm.val());
+                    assert(can_only_crash_as_state(self.wrpm_region@, self.log_id@, self@.drop_pending_appends()));
                 });
             };
             self.abs = Tracked(abs);

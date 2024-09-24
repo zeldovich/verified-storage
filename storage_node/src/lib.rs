@@ -231,19 +231,21 @@ fn test_log_on_memory_mapped_file() -> Option<()>
         FileCloseBehavior::TestingSoDeleteOnClose
     ).ok()?;
     #[cfg(target_os = "linux")]
-    let mut pm_region = FileBackedPersistentMemoryRegion::new(
+    let (pm_region, Tracked(frac)) = FileBackedPersistentMemoryRegion::new_v2(
         &file_name,
         region_size,
         PersistentMemoryCheck::DontCheckForPersistentMemory,
-    ).ok()?;
+    );
+    let mut pm_region = pm_region.ok()?;
 
     // Set up the memory region to contain a log. The capacity will be less than
     // the file size because a few bytes are needed for metadata.
-    let (capacity, log_id) = LogImpl::setup(&mut pm_region).ok()?;
+    let (res, Tracked(frac)) = LogImpl::setup(&mut pm_region, Tracked(frac));
+    let (capacity, log_id) = res.ok()?;
     runtime_assert(capacity <= 1024);
 
     // Start accessing the log.
-    let mut log = LogImpl::start(pm_region, log_id).ok()?;
+    let mut log = LogImpl::start(pm_region, log_id, Tracked(frac)).ok()?;
 
     // Tentatively append [30, 42, 100] to the log.
     let mut v: Vec<u8> = Vec::<u8>::new();

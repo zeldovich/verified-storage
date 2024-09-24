@@ -240,9 +240,9 @@ verus! {
         where
             PMRegion: PersistentMemoryRegionV2
     {
-        pm_region: PMRegion,
-        frac: Tracked<FractionalResource<PersistentMemoryRegionView, 3>>,
-        inv: Tracked<Arc<AtomicInvariant<LogInvParam, LogInvState, LogInvPred>>>,
+        pub pm_region: PMRegion,
+        pub frac: Tracked<FractionalResource<PersistentMemoryRegionView, 3>>,
+        pub inv: Tracked<Arc<AtomicInvariant<LogInvParam, LogInvState, LogInvPred>>>,
     }
 
     pub struct EmptyResult {}
@@ -400,6 +400,12 @@ verus! {
             self.pm_region.constants()
         }
 
+        open spec fn same_as(&self, other: &Self) -> bool {
+            self.constants() == other.constants() &&
+            self.pm_region.id() == other.pm_region.id() &&
+            self.inv@.constant() == other.inv@.constant()
+        }
+
         closed spec fn validperm(&self, p: &TrustedPermission) -> bool
         {
             p.frac.valid(self.inv@.constant().crash_frac_id, 1) &&
@@ -536,44 +542,55 @@ verus! {
             &&& can_only_crash_as_state(self.wrpm_region@, self.log_id@, self@.drop_pending_appends())
             &&& self.abs@.valid(self.inv@.constant().crash_frac_id, 1)
             &&& self.abs@.val() == AbstractLogCrashState{ state1: self@.drop_pending_appends(), state2: self@.drop_pending_appends() }
+            &&& self.wrpm_region.inv()
+            &&& self.wrpm_region.pm_region.id() == self.inv@.constant().pm_frac_id
+            &&& self.log_id@ == self.inv@.constant().log_id
         }
 
-/*
         // The `setup` method sets up persistent memory regions
         // `pm_region` to store an initial empty log. It returns a
         // vector listing the capacity of the log as well as a
         // fresh log ID to uniquely identify it. See `README.md`
         // for more documentation.
-        pub exec fn setup(pm_region: &mut PMRegion) -> (result: Result<(u64, u128), LogErr>)
+        #[verifier::external_body]
+        pub exec fn setup(pm_region: &mut PMRegion, Tracked(frac): Tracked<FractionalResource<PersistentMemoryRegionView, 3>>) -> (result: (Result<(u64, u128), LogErr>, Tracked<FractionalResource<PersistentMemoryRegionView, 3>>))
             requires
                 old(pm_region).inv(),
+                frac.valid(old(pm_region).id(), 2),
             ensures
                 pm_region.inv(),
-                pm_region@.no_outstanding_writes(),
-                match result {
+                pm_region.id() == old(pm_region).id(),
+                result.1@.valid(pm_region.id(), 2),
+                result.1@.val().no_outstanding_writes(),
+                match result.0 {
                     Ok((log_capacity, log_id)) => {
                         let state = AbstractLogState::initialize(log_capacity as int);
-                        &&& log_capacity <= pm_region@.len()
-                        &&& pm_region@.len() == old(pm_region)@.len()
-                        &&& can_only_crash_as_state(pm_region@, log_id, state)
-                        &&& UntrustedLogImpl::recover(pm_region@.committed(), log_id) == Some(state)
+                        &&& log_capacity <= result.1@.val().len()
+                        &&& result.1@.val().len() == frac.val().len()
+                        &&& can_only_crash_as_state(result.1@.val(), log_id, state)
+                        &&& UntrustedLogImpl::recover(result.1@.val().committed(), log_id) == Some(state)
                         // Required by the `start` function's precondition. Putting this in the
                         // postcond of `setup` ensures that the trusted caller doesn't have to prove it
-                        &&& UntrustedLogImpl::recover(pm_region@.flush().committed(), log_id) == Some(state)
+                        &&& UntrustedLogImpl::recover(result.1@.val().flush().committed(), log_id) == Some(state)
                         &&& state == state.drop_pending_appends()
                     },
                     Err(LogErr::InsufficientSpaceForSetup { required_space }) => {
-                        &&& pm_region@ == old(pm_region)@.flush()
-                        &&& pm_region@.len() < required_space
+                        &&& result.1@.val() == frac.val().flush()
+                        &&& result.1@.val().len() < required_space
                     },
                     _ => false
                 }
         {
+            /*
             let log_id = generate_fresh_log_id();
-            let capacities = UntrustedLogImpl::setup(pm_region, log_id)?;
-            Ok((capacities, log_id))
+            let capacities = UntrustedLogImpl::setup(pm_region, log_id);
+            match capacities {
+                Err(e) => { (Err(e), Tracked(frac)) },
+                Ok(capacities) => { Ok((capacities, log_id)) },
+            }
+            */
+            unimplemented!()
         }
-*/
 
         // The `start` method creates an `UntrustedLogImpl` out of a
         // persistent memory region. It's assumed that the region was
@@ -625,7 +642,7 @@ verus! {
             let tracked inv = AtomicInvariant::<_, _, LogInvPred>::new(inv_param, inv_state, PMEM_INV_NS as int);
             let tracked inv = Arc::new(inv);
 
-            let mut wrpm_region = WriteRestrictedPersistentMemoryRegionV2::new(pm_region, Tracked(pm1), Tracked(inv));
+            let mut wrpm_region = WriteRestrictedPersistentMemoryRegionV2::new(pm_region, Tracked(pm1), Tracked(inv.clone()));
 
             let tracked perm = TrustedPermission::new_one_possibility(abs1, log_id, state);
             let untrusted_log_impl =
@@ -635,7 +652,7 @@ verus! {
                     untrusted_log_impl,
                     log_id:  Ghost(log_id),
                     abs: Tracked(perm.frac),
-                    inv: Tracked(inv),
+                    inv: Tracked(inv.clone()),
                     wrpm_region
                 },
             )
@@ -738,10 +755,7 @@ verus! {
                         state2: self@.drop_pending_appends(),
                     });
                     inner.crash = abs.split_mut(1);
-
                     inner.pm.agree(self.wrpm_region.frac.borrow());
-                    assert(self.wrpm_region@ == inner.pm.val());
-                    assert(can_only_crash_as_state(self.wrpm_region@, self.log_id@, self@.drop_pending_appends()));
                 });
             };
             self.abs = Tracked(abs);

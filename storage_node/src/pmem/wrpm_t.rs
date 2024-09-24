@@ -143,6 +143,7 @@ pub trait WriteRestrictedPersistentMemoryRegionTrait<Perm> where Perm: CheckPerm
     spec fn inv(&self) -> bool;
     spec fn constants(&self) -> PersistentMemoryConstants;
     spec fn validperm(&self, p: &Perm) -> bool;
+    spec fn same_as(&self, other: &Self) -> bool;
 
     // This executable function is the only way to perform a write, and
     // it requires the caller to supply permission authorizing the
@@ -162,6 +163,7 @@ pub trait WriteRestrictedPersistentMemoryRegionTrait<Perm> where Perm: CheckPerm
         ensures
             self.inv(),
             self.constants() == old(self).constants(),
+            old(self).same_as(self),
             self@ == old(self)@.write(addr as int, bytes@);
 
     exec fn serialize_and_write<S>(&mut self, addr: u64, to_write: &S, perm: Tracked<&Perm>)
@@ -177,6 +179,7 @@ pub trait WriteRestrictedPersistentMemoryRegionTrait<Perm> where Perm: CheckPerm
         ensures
             self.inv(),
             self.constants() == old(self).constants(),
+            old(self).same_as(self),
             self@ == old(self)@.write(addr as int, to_write.spec_to_bytes());
 
     // Even though the memory is write-restricted, no restrictions are
@@ -189,8 +192,9 @@ pub trait WriteRestrictedPersistentMemoryRegionTrait<Perm> where Perm: CheckPerm
             old(self).inv(),
         ensures
             self.inv(),
-            self@ == old(self)@.flush(),
-            self.constants() == old(self).constants();
+            self.constants() == old(self).constants(),
+            old(self).same_as(self),
+            self@ == old(self)@.flush();
 
     // Pass through read-only functions from PersistentMemoryRegion.
     exec fn read_aligned<S>(&self, addr: u64) -> (bytes: Result<MaybeCorruptedBytes<S>, PmemError>)
@@ -280,6 +284,10 @@ impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegionTrait<Perm> for WriteR
     closed spec fn constants(&self) -> PersistentMemoryConstants
     {
         self.pm_region.constants()
+    }
+
+    closed spec fn same_as(&self, other: &Self) -> bool {
+        self.constants() == other.constants()
     }
 
     open spec fn validperm(&self, p: &Perm) -> bool

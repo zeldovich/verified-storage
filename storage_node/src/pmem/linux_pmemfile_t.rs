@@ -1,5 +1,6 @@
 use crate::pmem::pmemspec_t::*;
 use crate::pmem::pmcopy_t::*;
+use crate::pmem::frac_v::*;
 use core::ffi::c_void;
 use core::slice;
 use std::{cell::RefCell, convert::TryInto, ffi::CString, rc::Rc};
@@ -152,10 +153,14 @@ impl FileBackedPersistentMemoryRegion
     #[verifier::external_body]
     fn new_internal(path: &str, region_size: u64, open_behavior: FileOpenBehavior,
                     persistent_memory_check: PersistentMemoryCheck)
-                    -> (result: Result<Self, PmemError>)
+                    -> (result: (Result<Self, PmemError>, Tracked<FractionalResource<PersistentMemoryRegionView, 3>>))
         ensures
-            match result {
-                Ok(region) => PersistentMemoryRegion::inv(&region) && region@.len() == region_size,
+            match result.0 {
+                Ok(region) => PersistentMemoryRegion::inv(&region) &&
+                              region@.len() == region_size &&
+                              PersistentMemoryRegionV2::inv(&region) &&
+                              result.1@.valid(region.id(), 2) &&
+                              result.1@.val().len() == region_size,
                 Err(_) => true,
             }
     {
@@ -164,10 +169,18 @@ impl FileBackedPersistentMemoryRegion
             region_size as usize,
             open_behavior,
             persistent_memory_check,
-        )?;
-        let mmf = Rc::<RefCell<MemoryMappedFile>>::new(RefCell::<MemoryMappedFile>::new(mmf));
-        let section = MemoryMappedFileSection::new(mmf, region_size as usize)?;
-        Ok(Self { section })
+        );
+        match mmf {
+            Err(e) => { (Err(e), arbitrary()) },
+            Ok(mmf) => {
+                let mmf = Rc::<RefCell<MemoryMappedFile>>::new(RefCell::<MemoryMappedFile>::new(mmf));
+                let section = MemoryMappedFileSection::new(mmf, region_size as usize);
+                match section {
+                    Err(e) => { (Err(e), arbitrary()) },
+                    Ok(section) => { (Ok(Self { section }), arbitrary()) },
+                }
+            },
+        }
     }
 
     pub fn new(path: &str, region_size: u64, persistent_memory_check: PersistentMemoryCheck)
@@ -178,6 +191,20 @@ impl FileBackedPersistentMemoryRegion
                 Err(_) => true,
             }
     {
+        let (result, Tracked(frac)) = Self::new_internal(path, region_size, FileOpenBehavior::CreateNew, persistent_memory_check);
+        result
+    }
+
+    pub fn new_v2(path: &str, region_size: u64, persistent_memory_check: PersistentMemoryCheck)
+                  -> (result: (Result<Self, PmemError>, Tracked<FractionalResource<PersistentMemoryRegionView, 3>>))
+        ensures
+            match result.0 {
+                Ok(region) => PersistentMemoryRegionV2::inv(&region) &&
+                              result.1@.valid(region.id(), 2) &&
+                              result.1@.val().len() == region_size,
+                Err(_) => true,
+            }
+    {
         Self::new_internal(path, region_size, FileOpenBehavior::CreateNew, persistent_memory_check)
     }
 
@@ -185,6 +212,21 @@ impl FileBackedPersistentMemoryRegion
         ensures
             match result {
                 Ok(region) => PersistentMemoryRegion::inv(&region) && region@.len() == region_size,
+                Err(_) => true,
+            }
+    {
+        let (result, Tracked(frac)) = Self::new_internal(path, region_size, FileOpenBehavior::OpenExisting,
+                                                         PersistentMemoryCheck::DontCheckForPersistentMemory);
+        result
+    }
+
+    pub fn restore_v2(path: &str, region_size: u64)
+            -> (result: (Result<Self, PmemError>, Tracked<FractionalResource<PersistentMemoryRegionView, 3>>))
+        ensures
+            match result.0 {
+                Ok(region) => PersistentMemoryRegionV2::inv(&region) &&
+                              result.1@.valid(region.id(), 2) &&
+                              result.1@.val().len() == region_size,
                 Err(_) => true,
             }
     {
@@ -371,6 +413,7 @@ impl PersistentMemoryRegionV2 for FileBackedPersistentMemoryRegion
         (self.section.size as u64, arbitrary())
     }
 
+    #[verifier::external_body]
     fn read_aligned<S, ResultT, Op>(&self, addr: u64, op: Tracked<Op>) -> (Result<MaybeCorruptedBytes<S>, PmemError>, Tracked<ResultT>)
         where
             S: PmCopy 
@@ -392,6 +435,7 @@ impl PersistentMemoryRegionV2 for FileBackedPersistentMemoryRegion
         }
     }
 
+    #[verifier::external_body]
     fn read_unaligned<ResultT, Op>(&self, addr: u64, num_bytes: u64, op: Tracked<Op>) -> (Result<Vec<u8>, PmemError>, Tracked<ResultT>)
     {
         let pm_slice = self.get_slice_at_offset(addr, num_bytes);

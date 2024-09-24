@@ -1004,13 +1004,16 @@ verus! {
             where
                 WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<TrustedPermission>
             requires
+                old(wrpm_region).inv(),
                 old(self).inv(&*old(wrpm_region), log_id),
                 forall |s| #[trigger] perm.check_permission(s) <==> {
                     ||| Self::recover(s, log_id) == Some(old(self)@.drop_pending_appends())
                     ||| Self::recover(s, log_id) == Some(old(self)@.commit().drop_pending_appends())
                 },
             ensures
+                wrpm_region.inv(),
                 self.inv(wrpm_region, log_id),
+                old(wrpm_region).same_as(wrpm_region),
                 wrpm_region.constants() == old(wrpm_region).constants(),
                 can_only_crash_as_state(wrpm_region@, log_id, self@.drop_pending_appends()),
                 result is Ok,
@@ -1517,14 +1520,14 @@ verus! {
         // tail, and capacity of the log. See `README.md` for more
         // documentation and examples of its use.
         #[allow(unused_variables)]
-        pub exec fn get_head_tail_and_capacity<Perm, PMRegion>(
+        pub exec fn get_head_tail_and_capacity<Perm, WRPMRegion>(
             &self,
-            wrpm_region: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+            wrpm_region: &WRPMRegion,
             Ghost(log_id): Ghost<u128>,
         ) -> (result: Result<(u128, u128, u64), LogErr>)
             where
                 Perm: CheckPermission<Seq<u8>>,
-                PMRegion: PersistentMemoryRegion
+                WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<Perm>,
             requires
                 self.inv(wrpm_region, log_id)
             ensures

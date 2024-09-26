@@ -102,13 +102,13 @@ verus! {
         //
         // Most of the conjuncts in this invariant are defined in the
         // file `inv_v.rs`. See that file for detailed explanations.
-        pub closed spec fn inv<Perm, PMRegion>(
+        pub closed spec fn inv<ID, Perm, PMRegion>(
             &self,
-            wrpm_region: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+            wrpm_region: &WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
             log_id: u128,
         ) -> bool
             where
-                Perm: CheckPermission<Seq<u8>>,
+                Perm: CheckPermission<ID, Seq<u8>>,
                 PMRegion: PersistentMemoryRegion
         {
             &&& wrpm_region.inv() // whatever the persistent memory regions require as an invariant
@@ -121,13 +121,13 @@ verus! {
             &&& metadata_types_set(wrpm_region@.read_state)
         }
 
-        pub proof fn lemma_inv_implies_wrpm_inv<Perm, PMRegion>(
+        pub proof fn lemma_inv_implies_wrpm_inv<ID, Perm, PMRegion>(
             &self,
-            wrpm_region: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+            wrpm_region: &WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
             log_id: u128
         )
             where
-                Perm: CheckPermission<Seq<u8>>,
+                Perm: CheckPermission<ID, Seq<u8>>,
                 PMRegion: PersistentMemoryRegion
             requires
                 self.inv(wrpm_region, log_id)
@@ -135,13 +135,13 @@ verus! {
                 wrpm_region.inv()
         {}
 
-        pub proof fn lemma_inv_implies_can_only_crash_as<Perm, PMRegion>(
+        pub proof fn lemma_inv_implies_can_only_crash_as<ID, Perm, PMRegion>(
             &self,
-            wrpm_region: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+            wrpm_region: &WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
             log_id: u128
         )
             where
-                Perm: CheckPermission<Seq<u8>>,
+                Perm: CheckPermission<ID, Seq<u8>>,
                 PMRegion: PersistentMemoryRegion
             requires
                 self.inv(wrpm_region, log_id)
@@ -257,7 +257,7 @@ verus! {
         // how we can write `wrpm_region`. This is moot, though,
         // because we don't ever write to the memory.
         pub exec fn start<PMRegion>(
-            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>,
+            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<u8, TrustedPermission, PMRegion>,
             log_id: u128,
             Tracked(perm): Tracked<&TrustedPermission>,
             Ghost(state): Ghost<AbstractLogState>,
@@ -273,6 +273,7 @@ verus! {
             ensures
                 wrpm_region.inv(),
                 wrpm_region.constants() == old(wrpm_region).constants(),
+                wrpm_region.id() == old(wrpm_region).id(),
                 match result {
                     Ok(log_impl) => {
                         &&& log_impl.inv(wrpm_region, log_id)
@@ -325,7 +326,7 @@ verus! {
         // unreachable during recovery.
         exec fn tentatively_append_to_log<PMRegion>(
             &self,
-            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>,
+            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<u8, TrustedPermission, PMRegion>,
             subregion: &WriteRestrictedPersistentMemorySubregion,
             bytes_to_append: &[u8],
             Tracked(perm): Tracked<&TrustedPermission>,
@@ -348,6 +349,8 @@ verus! {
                                                                 log_area_offset),
             ensures
                 subregion.inv(wrpm_region, perm),
+                wrpm_region.constants() == old(wrpm_region).constants(),
+                wrpm_region.id() == old(wrpm_region).id(),
                 match result {
                     Ok(offset) => {
                         &&& offset == self.info.head + self.info.log_plus_pending_length
@@ -509,7 +512,7 @@ verus! {
         // all pending appends dropped.
         pub exec fn tentatively_append<PMRegion>(
             &mut self,
-            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>,
+            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<u8, TrustedPermission, PMRegion>,
             bytes_to_append: &[u8],
             Ghost(log_id): Ghost<u128>,
             Tracked(perm): Tracked<&TrustedPermission>,
@@ -518,11 +521,14 @@ verus! {
                 PMRegion: PersistentMemoryRegion
             requires
                 old(self).inv(&*old(wrpm_region), log_id),
+                perm.valid(old(wrpm_region).id()),
                 forall |s| #[trigger] perm.check_permission(s) <==>
                     Self::recover(s, log_id) == Some(old(self)@.drop_pending_appends()),
             ensures
                 self.inv(wrpm_region, log_id),
+                wrpm_region.inv(),
                 wrpm_region.constants() == old(wrpm_region).constants(),
+                wrpm_region.id() == old(wrpm_region).id(),
                 crashes_as_abstract_state(wrpm_region@, log_id, self@.drop_pending_appends()),
                 match result {
                     Ok(offset) => {
@@ -637,7 +643,7 @@ verus! {
         // of the persistent memory.
         exec fn update_inactive_log_metadata<PMRegion>(
             &self,
-            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>,
+            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<u8, TrustedPermission, PMRegion>,
             subregion: &WriteRestrictedPersistentMemorySubregion,
             Ghost(log_id): Ghost<u128>,
             Ghost(prev_info): Ghost<LogInfo>,
@@ -652,6 +658,8 @@ verus! {
                 forall |addr: int| #[trigger] subregion.is_writable_absolute_addr_fn()(addr),
             ensures
                 subregion.inv(wrpm_region, perm),
+                wrpm_region.constants() == old(wrpm_region).constants(),
+                wrpm_region.id() == old(wrpm_region).id(),
                 ({
                     let state_after_flush = subregion.view(wrpm_region).read_state;
                     let log_metadata_bytes = extract_bytes(state_after_flush, 0, LogMetadata::spec_size_of());
@@ -734,7 +742,7 @@ verus! {
         // caller doesn't have to flush before calling this function.
         exec fn update_log_metadata<PMRegion>(
             &mut self,
-            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>,
+            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<u8, TrustedPermission, PMRegion>,
             Ghost(log_id): Ghost<u128>,
             Ghost(prev_info): Ghost<LogInfo>,
             Ghost(prev_state): Ghost<AbstractLogState>,
@@ -751,6 +759,7 @@ verus! {
                 info_consistent_with_log_area_in_region(flush_pm_view(old(wrpm_region)@), old(self).info, old(self).state@),
                 info_consistent_with_log_area_in_region(old(wrpm_region)@, prev_info, prev_state),
                 old(self).info.log_area_len == prev_info.log_area_len,
+                perm.valid(old(wrpm_region).id()),
                 forall |s| {
                           ||| Self::recover(s, log_id) == Some(prev_state.drop_pending_appends())
                           ||| Self::recover(s, log_id) == Some(old(self).state@.drop_pending_appends())
@@ -759,6 +768,7 @@ verus! {
             ensures
                 self.inv(wrpm_region, log_id),
                 wrpm_region.constants() == old(wrpm_region).constants(),
+                wrpm_region.id() == old(wrpm_region).id(),
                 self.state == old(self).state,
         {
             broadcast use pmcopy_axioms;
@@ -955,7 +965,7 @@ verus! {
         // state after all pending appends are committed.
         pub exec fn commit<PMRegion>(
             &mut self,
-            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>,
+            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<u8, TrustedPermission, PMRegion>,
             Ghost(log_id): Ghost<u128>,
             Tracked(perm): Tracked<&TrustedPermission>,
         ) -> (result: Result<(), LogErr>)
@@ -963,13 +973,16 @@ verus! {
                 PMRegion: PersistentMemoryRegion
             requires
                 old(self).inv(&*old(wrpm_region), log_id),
+                perm.valid(old(wrpm_region).id()),
                 forall |s| #[trigger] perm.check_permission(s) <==> {
                     ||| Self::recover(s, log_id) == Some(old(self)@.drop_pending_appends())
                     ||| Self::recover(s, log_id) == Some(old(self)@.commit().drop_pending_appends())
                 },
             ensures
                 self.inv(wrpm_region, log_id),
+                wrpm_region.inv(),
                 wrpm_region.constants() == old(wrpm_region).constants(),
+                wrpm_region.id() == old(wrpm_region).id(),
                 crashes_as_abstract_state(wrpm_region@, log_id, self@.drop_pending_appends()),
                 result is Ok,
                 self@ == old(self)@.commit(),
@@ -1097,7 +1110,7 @@ verus! {
         #[verifier::rlimit(30)]
         pub exec fn advance_head<PMRegion>(
             &mut self,
-            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>,
+            wrpm_region: &mut WriteRestrictedPersistentMemoryRegion<u8, TrustedPermission, PMRegion>,
             new_head: u128,
             Ghost(log_id): Ghost<u128>,
             Tracked(perm): Tracked<&TrustedPermission>,
@@ -1106,6 +1119,7 @@ verus! {
                 PMRegion: PersistentMemoryRegion
             requires
                 old(self).inv(&*old(wrpm_region), log_id),
+                perm.valid(old(wrpm_region).id()),
                 forall |s| #[trigger] perm.check_permission(s) <==> {
                     ||| Self::recover(s, log_id) == Some(old(self)@.drop_pending_appends())
                     ||| Self::recover(s, log_id) ==
@@ -1113,7 +1127,9 @@ verus! {
                 },
             ensures
                 self.inv(wrpm_region, log_id),
+                wrpm_region.inv(),
                 wrpm_region.constants() == old(wrpm_region).constants(),
+                wrpm_region.id() == old(wrpm_region).id(),
                 crashes_as_abstract_state(wrpm_region@, log_id, self@.drop_pending_appends()),
                 match result {
                     Ok(()) => {
@@ -1279,15 +1295,15 @@ verus! {
         // containing the read bytes. It doesn't guarantee that those
         // bytes aren't corrupted by persistent memory corruption. See
         // `README.md` for more documentation and examples of its use.
-        pub exec fn read<Perm, PMRegion>(
+        pub exec fn read<ID, Perm, PMRegion>(
             &self,
-            wrpm_region: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+            wrpm_region: &WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
             pos: u128,
             len: u64,
             Ghost(log_id): Ghost<u128>,
         ) -> (result: Result<(Vec<u8>, Ghost<Seq<int>>), LogErr>)
             where
-                Perm: CheckPermission<Seq<u8>>,
+                Perm: CheckPermission<ID, Seq<u8>>,
                 PMRegion: PersistentMemoryRegion,
             requires
                 self.inv(wrpm_region, log_id),
@@ -1481,13 +1497,13 @@ verus! {
         // tail, and capacity of the log. See `README.md` for more
         // documentation and examples of its use.
         #[allow(unused_variables)]
-        pub exec fn get_head_tail_and_capacity<Perm, PMRegion>(
+        pub exec fn get_head_tail_and_capacity<ID, Perm, PMRegion>(
             &self,
-            wrpm_region: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+            wrpm_region: &WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
             Ghost(log_id): Ghost<u128>,
         ) -> (result: Result<(u128, u128, u64), LogErr>)
             where
-                Perm: CheckPermission<Seq<u8>>,
+                Perm: CheckPermission<ID, Seq<u8>>,
                 PMRegion: PersistentMemoryRegion
             requires
                 self.inv(wrpm_region, log_id)

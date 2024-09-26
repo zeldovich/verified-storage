@@ -243,7 +243,7 @@ pub open spec fn condition_stable_to_subregion_modifications(
     } ==> condition(s2)
 }
 
-pub open spec fn condition_sufficient_to_create_wrpm_subregion<Perm>(
+pub open spec fn condition_sufficient_to_create_wrpm_subregion<ID, Perm>(
     region_view: PersistentMemoryRegionView,
     perm: &Perm,
     start: u64,
@@ -252,7 +252,7 @@ pub open spec fn condition_sufficient_to_create_wrpm_subregion<Perm>(
     condition: spec_fn(Seq<u8>) -> bool,
 ) -> bool
     where
-        Perm: CheckPermission<Seq<u8>>,
+        Perm: CheckPermission<ID, Seq<u8>>,
 {
     &&& start + len <= region_view.len() <= u64::MAX
     &&& condition(region_view.durable_state)
@@ -261,7 +261,7 @@ pub open spec fn condition_sufficient_to_create_wrpm_subregion<Perm>(
                                                   is_writable_absolute_addr_fn)
 }
 
-pub proof fn lemma_condition_sufficient_to_create_wrpm_subregion<Perm>(
+pub proof fn lemma_condition_sufficient_to_create_wrpm_subregion<ID, Perm>(
     region_view: PersistentMemoryRegionView,
     perm: &Perm,
     start: u64,
@@ -270,7 +270,7 @@ pub proof fn lemma_condition_sufficient_to_create_wrpm_subregion<Perm>(
     condition: spec_fn(Seq<u8>) -> bool,
 )
     where
-        Perm: CheckPermission<Seq<u8>>,
+        Perm: CheckPermission<ID, Seq<u8>>,
     requires
         region_view.valid(),
         condition_sufficient_to_create_wrpm_subregion(region_view, perm, start, len, is_writable_absolute_addr_fn,
@@ -336,19 +336,20 @@ pub struct WriteRestrictedPersistentMemorySubregion
 
 impl WriteRestrictedPersistentMemorySubregion
 {
-    pub exec fn new<Perm, PMRegion>(
-        wrpm: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+    pub exec fn new<ID, Perm, PMRegion>(
+        wrpm: &WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
         Tracked(perm): Tracked<&Perm>,
         start: u64,
         Ghost(len): Ghost<nat>,
         Ghost(is_writable_absolute_addr_fn): Ghost<spec_fn(int) -> bool>,
     ) -> (result: Self)
         where
-            Perm: CheckPermission<Seq<u8>>,
+            Perm: CheckPermission<ID, Seq<u8>>,
             PMRegion: PersistentMemoryRegion,
         requires
             wrpm.inv(),
             wrpm@.valid(),
+            perm.valid(wrpm.id()),
             (start as nat) % (const_persistence_chunk_size() as nat) == 0,
             start + len <= wrpm@.len() <= u64::MAX,
             forall |alt_crash_state: Seq<u8>|
@@ -375,8 +376,8 @@ impl WriteRestrictedPersistentMemorySubregion
         result
     }
 
-    pub exec fn new_with_condition<Perm, PMRegion>(
-        wrpm: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+    pub exec fn new_with_condition<ID, Perm, PMRegion>(
+        wrpm: &WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
         Tracked(perm): Tracked<&Perm>,
         start: u64,
         Ghost(len): Ghost<nat>,
@@ -384,11 +385,12 @@ impl WriteRestrictedPersistentMemorySubregion
         Ghost(condition): Ghost<spec_fn(Seq<u8>) -> bool>,
     ) -> (result: Self)
         where
-            Perm: CheckPermission<Seq<u8>>,
+            Perm: CheckPermission<ID, Seq<u8>>,
             PMRegion: PersistentMemoryRegion,
         requires
             wrpm.inv(),
             wrpm@.valid(),
+            perm.valid(wrpm.id()),
             (start as nat) % (const_persistence_chunk_size() as nat) == 0,
             condition_sufficient_to_create_wrpm_subregion(wrpm@, perm, start, len, is_writable_absolute_addr_fn,
                                                           condition),
@@ -456,23 +458,23 @@ impl WriteRestrictedPersistentMemorySubregion
         get_subregion_view(self.initial_region_view(), self.start(), self.len())
     }
 
-    pub open spec fn view<Perm, PMRegion>(
+    pub open spec fn view<ID, Perm, PMRegion>(
         self,
-        wrpm: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>
+        wrpm: &WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>
     ) -> PersistentMemoryRegionView
         where
-            Perm: CheckPermission<Seq<u8>>,
+            Perm: CheckPermission<ID, Seq<u8>>,
             PMRegion: PersistentMemoryRegion,
     {
         get_subregion_view(wrpm@, self.start(), self.len())
     }
 
-    pub closed spec fn opaque_relation_with_wrpm<Perm, PMRegion>(
+    pub closed spec fn opaque_relation_with_wrpm<ID, Perm, PMRegion>(
         self,
-        wrpm: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+        wrpm: &WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
     ) -> bool
         where
-            Perm: CheckPermission<Seq<u8>>,
+            Perm: CheckPermission<ID, Seq<u8>>,
             PMRegion: PersistentMemoryRegion,
     {
         &&& wrpm.inv()
@@ -486,9 +488,9 @@ impl WriteRestrictedPersistentMemorySubregion
                                                    self.len(), self.is_writable_absolute_addr_fn())
     }
 
-    pub closed spec fn opaque_relation_with_perm<Perm>(self, perm: &Perm) -> bool
+    pub closed spec fn opaque_relation_with_perm<ID, Perm>(self, perm: &Perm) -> bool
         where
-            Perm: CheckPermission<Seq<u8>>,
+            Perm: CheckPermission<ID, Seq<u8>>,
     {
         forall |alt_crash_state: Seq<u8>|
             memories_differ_only_where_subregion_allows(self.initial_region_view().durable_state, alt_crash_state,
@@ -496,13 +498,13 @@ impl WriteRestrictedPersistentMemorySubregion
         ==> #[trigger] perm.check_permission(alt_crash_state)
     }
 
-    pub open spec fn inv<Perm, PMRegion>(
+    pub open spec fn inv<ID, Perm, PMRegion>(
         self,
-        wrpm: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+        wrpm: &WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
         perm: &Perm
     ) -> bool
         where
-            Perm: CheckPermission<Seq<u8>>,
+            Perm: CheckPermission<ID, Seq<u8>>,
             PMRegion: PersistentMemoryRegion,
     {
         &&& self.view(wrpm).valid()
@@ -510,6 +512,7 @@ impl WriteRestrictedPersistentMemorySubregion
         &&& self.initial_region_view().len() <= u64::MAX
         &&& self.opaque_relation_with_wrpm(wrpm)
         &&& self.opaque_relation_with_perm(perm)
+        &&& perm.valid(wrpm.id())
     }
 
     pub proof fn lemma_state_resulting_from_partial_write_differs_only_where_this_allows(
@@ -633,15 +636,15 @@ impl WriteRestrictedPersistentMemorySubregion
         }
     }
 
-    pub exec fn read_relative_unaligned<Perm, PMRegion>(
+    pub exec fn read_relative_unaligned<ID, Perm, PMRegion>(
         self: &Self,
-        wrpm: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+        wrpm: &WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
         relative_addr: u64,
         num_bytes: u64,
         Tracked(perm): Tracked<&Perm>,
     ) ->(result: Result<Vec<u8>, PmemError>)
         where
-            Perm: CheckPermission<Seq<u8>>,
+            Perm: CheckPermission<ID, Seq<u8>>,
             PMRegion: PersistentMemoryRegion,
         requires
             self.inv(wrpm, perm),
@@ -671,15 +674,15 @@ impl WriteRestrictedPersistentMemorySubregion
         self.read_absolute_unaligned(wrpm, relative_addr + self.start_, num_bytes, Tracked(perm))
     }
 
-    pub exec fn read_absolute_unaligned<Perm, PMRegion>(
+    pub exec fn read_absolute_unaligned<ID, Perm, PMRegion>(
         self: &Self,
-        wrpm: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+        wrpm: &WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
         absolute_addr: u64,
         num_bytes: u64,
         Tracked(perm): Tracked<&Perm>,
     ) -> (result: Result<Vec<u8>, PmemError>)
         where
-            Perm: CheckPermission<Seq<u8>>,
+            Perm: CheckPermission<ID, Seq<u8>>,
             PMRegion: PersistentMemoryRegion,
         requires
             self.inv(wrpm, perm),
@@ -722,16 +725,16 @@ impl WriteRestrictedPersistentMemorySubregion
         wrpm.get_pm_region_ref().read_unaligned(absolute_addr, num_bytes)
     }
 
-    pub exec fn read_relative_aligned<'a, S, Perm, PMRegion>(
+    pub exec fn read_relative_aligned<'a, S, ID, Perm, PMRegion>(
         self: &Self,
-        wrpm: &'a WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+        wrpm: &'a WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
         relative_addr: u64,
         Ghost(true_val): Ghost<S>,
         Tracked(perm): Tracked<&Perm>,
     ) -> (result: Result<MaybeCorruptedBytes<S>, PmemError>)
         where
             S: PmCopy + Sized,
-            Perm: CheckPermission<Seq<u8>>,
+            Perm: CheckPermission<ID, Seq<u8>>,
             PMRegion: PersistentMemoryRegion,
         requires
             self.inv(wrpm, perm),
@@ -757,16 +760,16 @@ impl WriteRestrictedPersistentMemorySubregion
         self.read_absolute_aligned(wrpm, relative_addr + self.start_, Ghost(true_val), Tracked(perm))
     }
 
-    pub exec fn read_absolute_aligned<'a, S, Perm, PMRegion>(
+    pub exec fn read_absolute_aligned<'a, S, ID, Perm, PMRegion>(
         self: &Self,
-        wrpm: &'a WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+        wrpm: &'a WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
         absolute_addr: u64,
         Ghost(true_val): Ghost<S>,
         Tracked(perm): Tracked<&Perm>,
     ) -> (result: Result<MaybeCorruptedBytes<S>, PmemError>)
         where
             S: PmCopy + Sized,
-            Perm: CheckPermission<Seq<u8>>,
+            Perm: CheckPermission<ID, Seq<u8>>,
             PMRegion: PersistentMemoryRegion,
         requires
             self.inv(wrpm, perm),
@@ -804,15 +807,15 @@ impl WriteRestrictedPersistentMemorySubregion
     }
 
 
-    pub exec fn write_relative<Perm, PMRegion>(
+    pub exec fn write_relative<ID, Perm, PMRegion>(
         self: &Self,
-        wrpm: &mut WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+        wrpm: &mut WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
         relative_addr: u64,
         bytes: &[u8],
         Tracked(perm): Tracked<&Perm>,
     )
         where
-            Perm: CheckPermission<Seq<u8>>,
+            Perm: CheckPermission<ID, Seq<u8>>,
             PMRegion: PersistentMemoryRegion,
         requires
             self.inv(old::<&mut _>(wrpm), perm),
@@ -820,6 +823,8 @@ impl WriteRestrictedPersistentMemorySubregion
             forall |i: int| relative_addr <= i < relative_addr + bytes@.len() ==> self.is_writable_relative_addr(i),
         ensures
             self.inv(wrpm, perm),
+            wrpm.constants() == old(wrpm).constants(),
+            wrpm.id() == old(wrpm).id(),
             self.view(wrpm).can_result_from_write(self.view(old::<&mut _>(wrpm)), relative_addr as int, bytes@),
     {
         assert(forall |addr| #![trigger self.is_writable_absolute_addr_fn()(addr)]
@@ -831,15 +836,15 @@ impl WriteRestrictedPersistentMemorySubregion
         wrpm.write(relative_addr + self.start_, bytes, Tracked(perm));
     }
 
-    pub exec fn write_absolute<Perm, PMRegion>(
+    pub exec fn write_absolute<ID, Perm, PMRegion>(
         self: &Self,
-        wrpm: &mut WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+        wrpm: &mut WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
         absolute_addr: u64,
         bytes: &[u8],
         Tracked(perm): Tracked<&Perm>,
     )
         where
-            Perm: CheckPermission<Seq<u8>>,
+            Perm: CheckPermission<ID, Seq<u8>>,
             PMRegion: PersistentMemoryRegion,
         requires
             self.inv(old::<&mut _>(wrpm), perm),
@@ -849,6 +854,8 @@ impl WriteRestrictedPersistentMemorySubregion
                 #[trigger] self.is_writable_absolute_addr_fn()(i),
         ensures
             self.inv(wrpm, perm),
+            wrpm.constants() == old(wrpm).constants(),
+            wrpm.id() == old(wrpm).id(),
             self.view(wrpm).can_result_from_write(self.view(old::<&mut _>(wrpm)), absolute_addr - self.start(), bytes@),
     {
         proof {
@@ -858,16 +865,16 @@ impl WriteRestrictedPersistentMemorySubregion
         wrpm.write(absolute_addr, bytes, Tracked(perm));
     }
 
-    pub exec fn serialize_and_write_relative<S, Perm, PMRegion>(
+    pub exec fn serialize_and_write_relative<S, ID, Perm, PMRegion>(
         self: &Self,
-        wrpm: &mut WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+        wrpm: &mut WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
         relative_addr: u64,
         to_write: &S,
         Tracked(perm): Tracked<&Perm>,
     )
         where
             S: PmCopy + Sized,
-            Perm: CheckPermission<Seq<u8>>,
+            Perm: CheckPermission<ID, Seq<u8>>,
             PMRegion: PersistentMemoryRegion,
         requires
             self.inv(old::<&mut _>(wrpm), perm),
@@ -876,6 +883,8 @@ impl WriteRestrictedPersistentMemorySubregion
                 self.is_writable_relative_addr(i),
         ensures
             self.inv(wrpm, perm),
+            wrpm.constants() == old(wrpm).constants(),
+            wrpm.id() == old(wrpm).id(),
             self.view(wrpm).can_result_from_write(self.view(old::<&mut _>(wrpm)), relative_addr as int,
                                                   to_write.spec_to_bytes()),
             wrpm@.read_state.subrange(relative_addr + self.start(),
@@ -893,16 +902,16 @@ impl WriteRestrictedPersistentMemorySubregion
         wrpm.serialize_and_write(relative_addr + self.start_, to_write, Tracked(perm));
     }
 
-    pub exec fn serialize_and_write_absolute<S, Perm, PMRegion>(
+    pub exec fn serialize_and_write_absolute<S, ID, Perm, PMRegion>(
         self: &Self,
-        wrpm: &mut WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+        wrpm: &mut WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
         absolute_addr: u64,
         to_write: &S,
         Tracked(perm): Tracked<&Perm>,
     )
         where
             S: PmCopy + Sized,
-            Perm: CheckPermission<Seq<u8>>,
+            Perm: CheckPermission<ID, Seq<u8>>,
             PMRegion: PersistentMemoryRegion,
         requires
             self.inv(old::<&mut _>(wrpm), perm),
@@ -912,6 +921,8 @@ impl WriteRestrictedPersistentMemorySubregion
                 #[trigger] self.is_writable_absolute_addr_fn()(i),
         ensures
             self.inv(wrpm, perm),
+            wrpm.constants() == old(wrpm).constants(),
+            wrpm.id() == old(wrpm).id(),
             self.view(wrpm).can_result_from_write(self.view(old::<&mut _>(wrpm)), absolute_addr - self.start(),
                                                   to_write.spec_to_bytes()),
             wrpm@.read_state.subrange(absolute_addr as int, absolute_addr + S::spec_size_of()) ==
@@ -926,12 +937,12 @@ impl WriteRestrictedPersistentMemorySubregion
         wrpm.serialize_and_write(absolute_addr, to_write, Tracked(perm));
     }
 
-    pub proof fn lemma_reveal_opaque_inv<Perm, PMRegion>(
+    pub proof fn lemma_reveal_opaque_inv<ID, Perm, PMRegion>(
         self,
-        wrpm: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+        wrpm: &WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
     )
         where
-            Perm: CheckPermission<Seq<u8>>,
+            Perm: CheckPermission<ID, Seq<u8>>,
             PMRegion: PersistentMemoryRegion,
         requires
             self.opaque_relation_with_wrpm(wrpm),
@@ -953,12 +964,12 @@ impl WriteRestrictedPersistentMemorySubregion
     {
     }
 
-    pub proof fn lemma_if_committed_subview_unchanged_then_committed_view_unchanged<Perm, PMRegion>(
+    pub proof fn lemma_if_committed_subview_unchanged_then_committed_view_unchanged<ID, Perm, PMRegion>(
         self,
-        wrpm: &WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>,
+        wrpm: &WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>,
     )
         where
-            Perm: CheckPermission<Seq<u8>>,
+            Perm: CheckPermission<ID, Seq<u8>>,
             PMRegion: PersistentMemoryRegion,
         requires
             self.opaque_relation_with_wrpm(wrpm),

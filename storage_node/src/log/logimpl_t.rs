@@ -106,9 +106,13 @@ verus! {
         ghost is_state_allowable: spec_fn(Seq<u8>) -> bool
     }
 
-    impl CheckPermission<Seq<u8>> for TrustedPermission {
+    impl CheckPermission<u8, Seq<u8>> for TrustedPermission {
         closed spec fn check_permission(&self, state: Seq<u8>) -> bool {
             (self.is_state_allowable)(state)
+        }
+
+        closed spec fn valid(&self, id: u8) -> bool {
+            true
         }
     }
 
@@ -198,7 +202,7 @@ verus! {
     pub struct LogImpl<PMRegion: PersistentMemoryRegion> {
         untrusted_log_impl: UntrustedLogImpl,
         log_id: Ghost<u128>,
-        wrpm_region: WriteRestrictedPersistentMemoryRegion<TrustedPermission, PMRegion>
+        wrpm_region: WriteRestrictedPersistentMemoryRegion<u8, TrustedPermission, PMRegion>
     }
 
     impl <PMRegion: PersistentMemoryRegion> LogImpl<PMRegion> {

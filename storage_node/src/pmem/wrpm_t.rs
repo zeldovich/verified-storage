@@ -5,24 +5,26 @@ use builtin_macros::*;
 use vstd::prelude::*;
 
 verus! {
-pub trait CheckPermission<State>
+pub trait CheckPermission<ID, State>
 {
     spec fn check_permission(&self, state: State) -> bool;
+    spec fn valid(&self, id: ID) -> bool;
 }
 
 #[allow(dead_code)]
-pub struct WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>
+pub struct WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>
     where
-        Perm: CheckPermission<Seq<u8>>,
+        Perm: CheckPermission<ID, Seq<u8>>,
         PMRegion: PersistentMemoryRegion
 {
     pm_region: PMRegion,
+    ghost id: Option<ID>,
     ghost perm: Option<Perm>, // Needed to work around Rust limitation that Perm must be referenced
 }
 
-impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>
+impl<ID, Perm, PMRegion> WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>
     where
-        Perm: CheckPermission<Seq<u8>>,
+        Perm: CheckPermission<ID, Seq<u8>>,
         PMRegion: PersistentMemoryRegion
 {
     pub closed spec fn view(&self) -> PersistentMemoryRegionView
@@ -40,6 +42,11 @@ impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>
         self.pm_region.constants()
     }
 
+    pub closed spec fn id(&self) -> ID
+    {
+        arbitrary()
+    }
+
     pub exec fn new(pm_region: PMRegion) -> (wrpm_region: Self)
         requires
             pm_region.inv(),
@@ -50,6 +57,7 @@ impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>
     {
         Self {
             pm_region: pm_region,
+            id: None,
             perm: None
         }
     }
@@ -78,6 +86,7 @@ impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>
     pub exec fn write(&mut self, addr: u64, bytes: &[u8], perm: Tracked<&Perm>)
         requires
             old(self).inv(),
+            perm@.valid(old(self).id()),
             addr + bytes@.len() <= old(self)@.len(),
             // The key thing the caller must prove is that all crash states are authorized by `perm`
             forall |s| can_result_from_partial_write(s, old(self)@.durable_state, addr as int, bytes@)
@@ -85,6 +94,7 @@ impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>
         ensures
             self.inv(),
             self.constants() == old(self).constants(),
+            self.id() == old(self).id(),
             self@.can_result_from_write(old(self)@, addr as int, bytes@),
     {
         let ghost pmr = self.pm_region;
@@ -97,6 +107,7 @@ impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>
             S: PmCopy + Sized
         requires
             old(self).inv(),
+            perm@.valid(old(self).id()),
             addr + S::spec_size_of() <= old(self)@.len(),
             // The key thing the caller must prove is that all crash states are authorized by `perm`
             forall |s| can_result_from_partial_write(s, old(self)@.durable_state, addr as int, to_write.spec_to_bytes())
@@ -104,6 +115,7 @@ impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>
         ensures
             self.inv(),
             self.constants() == old(self).constants(),
+            self.id() == old(self).id(),
             self@.can_result_from_write(old(self)@, addr as int, to_write.spec_to_bytes()),
     {
         self.pm_region.serialize_and_write(addr, to_write);
@@ -121,6 +133,7 @@ impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>
             old(self)@.flush_predicted(), // it must have been prophesized that this flush would happen
             self.inv(),
             self.constants() == old(self).constants(),
+            self.id() == old(self).id(),
             self@ == old(self)@,
     {
         self.pm_region.flush()

@@ -475,6 +475,7 @@ verus! {
             ensures
                 wrpm_region.inv(),
                 wrpm_region@ == frac.val(),
+                wrpm_region.frac == frac,
                 wrpm_region.constants() == pm_region.constants(),
         {
             Self {
@@ -513,7 +514,6 @@ verus! {
         // `UntrustedLogImpl` it wraps says it is.
         pub closed spec fn view(self) -> AbstractLogState
         {
-            // self.abs@.val()
             self.untrusted_log_impl@
         }
 
@@ -597,11 +597,12 @@ verus! {
         // initialized with `setup` and then only log operations were
         // allowed to mutate them. See `README.md` for more
         // documentation and an example of use.
-        pub exec fn start(pm_region: PMRegion, log_id: u128, Tracked(frac): Tracked<FractionalResource<PersistentMemoryRegionView, 3>>) -> (result: Result<LogImpl<PMRegion>, LogErr>)
+        pub exec fn start(pm_region: PMRegion, log_id: u128, Tracked(frac): Tracked<FractionalResource<PersistentMemoryRegionView, 3>>, Ghost(state): Ghost<AbstractLogState>) -> (result: Result<LogImpl<PMRegion>, LogErr>)
             requires
                 pm_region.inv(),
                 frac.valid(pm_region.id(), 2),
-                UntrustedLogImpl::recover(frac.val().flush().committed(), log_id).is_Some(),
+                UntrustedLogImpl::recover(frac.val().flush().committed(), log_id) == Some(state),
+                can_only_crash_as_state(frac.val(), log_id, state),
             ensures
                 match result {
                     Ok(trusted_log_impl) => {
@@ -620,8 +621,6 @@ verus! {
             // must restrict how it updates memory. We must only let
             // it write such that, if a crash happens in the middle,
             // it doesn't change the persistent state.
-
-            let ghost state = UntrustedLogImpl::recover(frac.val().flush().committed(), log_id).get_Some_0();
 
             let tracked abs = FractionalResource::<AbstractLogCrashState, 2>::alloc(AbstractLogCrashState{
                 state1: state,
@@ -647,11 +646,26 @@ verus! {
             let tracked perm = TrustedPermission::new_one_possibility(abs1, log_id, state);
             let untrusted_log_impl =
                 UntrustedLogImpl::start(&mut wrpm_region, log_id, Tracked(&perm), Ghost(state))?;
+
+            let tracked mut abs = perm.frac;
+            let Tracked(credit) = create_open_invariant_credit();
+            proof {
+                open_atomic_invariant!(credit => &inv => inner => {
+                    abs.combine_mut(inner.crash);
+                    abs.update_mut(AbstractLogCrashState{
+                        state1: untrusted_log_impl@.drop_pending_appends(),
+                        state2: untrusted_log_impl@.drop_pending_appends(),
+                    });
+                    inner.crash = abs.split_mut(1);
+                    inner.pm.agree(wrpm_region.frac.borrow());
+                });
+            };
+
             Ok(
                 LogImpl {
                     untrusted_log_impl,
                     log_id:  Ghost(log_id),
-                    abs: Tracked(perm.frac),
+                    abs: Tracked(abs),
                     inv: Tracked(inv.clone()),
                     wrpm_region
                 },

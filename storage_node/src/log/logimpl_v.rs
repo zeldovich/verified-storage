@@ -273,6 +273,7 @@ verus! {
             ensures
                 wrpm_region.inv(),
                 wrpm_region.constants() == old(wrpm_region).constants(),
+                old(wrpm_region).same_as(wrpm_region),
                 match result {
                     Ok(log_impl) => {
                         &&& log_impl.inv(wrpm_region, log_id)

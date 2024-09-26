@@ -245,7 +245,8 @@ fn test_log_on_memory_mapped_file() -> Option<()>
     runtime_assert(capacity <= 1024);
 
     // Start accessing the log.
-    let mut log = LogImpl::start(pm_region, log_id, Tracked(frac)).ok()?;
+    let ghost state = log::logimpl_v::UntrustedLogImpl::recover(frac.val().flush().committed(), log_id).get_Some_0();
+    let mut log = LogImpl::start(pm_region, log_id, Tracked(frac), Ghost(state)).ok()?;
 
     // Tentatively append [30, 42, 100] to the log.
     let mut v: Vec<u8> = Vec::<u8>::new();

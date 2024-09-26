@@ -12,24 +12,26 @@ verus! {
 /// tracked permission must authorize every possible state that could
 /// result from crashing while the write is ongoing.
 
-pub trait CheckPermission<State>
+pub trait CheckPermission<ID, State>
 {
     spec fn check_permission(&self, state: State) -> bool;
+    spec fn valid(&self, id: ID) -> bool;
 }
 
 #[allow(dead_code)]
-pub struct WriteRestrictedPersistentMemoryRegions<Perm, PMRegions>
+pub struct WriteRestrictedPersistentMemoryRegions<ID, Perm, PMRegions>
     where
-        Perm: CheckPermission<Seq<Seq<u8>>>,
+        Perm: CheckPermission<ID, Seq<Seq<u8>>>,
         PMRegions: PersistentMemoryRegions
 {
     pm_regions: PMRegions,
+    ghost id: Option<ID>,
     ghost perm: Option<Perm>, // Needed to work around Rust limitation that Perm must be referenced
 }
 
-impl<Perm, PMRegions> WriteRestrictedPersistentMemoryRegions<Perm, PMRegions>
+impl<ID, Perm, PMRegions> WriteRestrictedPersistentMemoryRegions<ID, Perm, PMRegions>
     where
-        Perm: CheckPermission<Seq<Seq<u8>>>,
+        Perm: CheckPermission<ID, Seq<Seq<u8>>>,
         PMRegions: PersistentMemoryRegions
 {
     pub closed spec fn view(&self) -> PersistentMemoryRegionsView
@@ -57,6 +59,7 @@ impl<Perm, PMRegions> WriteRestrictedPersistentMemoryRegions<Perm, PMRegions>
     {
         Self {
             pm_regions: pm_regions,
+            id: None,
             perm: None
         }
     }
@@ -138,12 +141,11 @@ impl<Perm, PMRegions> WriteRestrictedPersistentMemoryRegions<Perm, PMRegions>
     }
 }
 
-pub trait WriteRestrictedPersistentMemoryRegionTrait<Perm> where Perm: CheckPermission<Seq<u8>> {
+pub trait WriteRestrictedPersistentMemoryRegionTrait<Perm, ID> where Perm: CheckPermission<ID, Seq<u8>> {
     spec fn view(&self) -> PersistentMemoryRegionView;
     spec fn inv(&self) -> bool;
     spec fn constants(&self) -> PersistentMemoryConstants;
-    spec fn validperm(&self, p: &Perm) -> bool;
-    spec fn same_as(&self, other: &Self) -> bool;
+    spec fn id(&self) -> ID;
 
     // This executable function is the only way to perform a write, and
     // it requires the caller to supply permission authorizing the
@@ -153,7 +155,7 @@ pub trait WriteRestrictedPersistentMemoryRegionTrait<Perm> where Perm: CheckPerm
     exec fn write(&mut self, addr: u64, bytes: &[u8], perm: Tracked<&Perm>)
         requires
             old(self).inv(),
-            old(self).validperm(perm@),
+            perm@.valid(old(self).id()),
             addr + bytes@.len() <= old(self)@.len(),
             addr + bytes@.len() <= u64::MAX,
             old(self)@.no_outstanding_writes_in_range(addr as int, addr + bytes@.len()),
@@ -163,7 +165,7 @@ pub trait WriteRestrictedPersistentMemoryRegionTrait<Perm> where Perm: CheckPerm
         ensures
             self.inv(),
             self.constants() == old(self).constants(),
-            old(self).same_as(self),
+            self.id() == old(self).id(),
             self@ == old(self)@.write(addr as int, bytes@);
 
     exec fn serialize_and_write<S>(&mut self, addr: u64, to_write: &S, perm: Tracked<&Perm>)
@@ -179,7 +181,7 @@ pub trait WriteRestrictedPersistentMemoryRegionTrait<Perm> where Perm: CheckPerm
         ensures
             self.inv(),
             self.constants() == old(self).constants(),
-            old(self).same_as(self),
+            self.id() == old(self).id(),
             self@ == old(self)@.write(addr as int, to_write.spec_to_bytes());
 
     // Even though the memory is write-restricted, no restrictions are
@@ -193,7 +195,7 @@ pub trait WriteRestrictedPersistentMemoryRegionTrait<Perm> where Perm: CheckPerm
         ensures
             self.inv(),
             self.constants() == old(self).constants(),
-            old(self).same_as(self),
+            self.id() == old(self).id(),
             self@ == old(self)@.flush();
 
     // Pass through read-only functions from PersistentMemoryRegion.
@@ -257,18 +259,19 @@ pub trait WriteRestrictedPersistentMemoryRegionTrait<Perm> where Perm: CheckPerm
 }
 
 #[allow(dead_code)]
-pub struct WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>
+pub struct WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>
     where
-        Perm: CheckPermission<Seq<u8>>,
+        Perm: CheckPermission<ID, Seq<u8>>,
         PMRegion: PersistentMemoryRegion
 {
     pm_region: PMRegion,
+    ghost id: Option<ID>,
     ghost perm: Option<Perm>, // Needed to work around Rust limitation that Perm must be referenced
 }
 
-impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegionTrait<Perm> for WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>
+impl<ID, Perm, PMRegion> WriteRestrictedPersistentMemoryRegionTrait<Perm, ID> for WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>
     where
-        Perm: CheckPermission<Seq<u8>>,
+        Perm: CheckPermission<ID, Seq<u8>>,
         PMRegion: PersistentMemoryRegion
 {
     closed spec fn view(&self) -> PersistentMemoryRegionView
@@ -286,13 +289,8 @@ impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegionTrait<Perm> for WriteR
         self.pm_region.constants()
     }
 
-    closed spec fn same_as(&self, other: &Self) -> bool {
-        self.constants() == other.constants()
-    }
-
-    open spec fn validperm(&self, p: &Perm) -> bool
-    {
-        true
+    open spec fn id(&self) -> ID {
+        arbitrary()
     }
 
     // This executable function is the only way to perform a write, and
@@ -343,9 +341,9 @@ impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegionTrait<Perm> for WriteR
     }
 }
 
-impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>
+impl<ID, Perm, PMRegion> WriteRestrictedPersistentMemoryRegion<ID, Perm, PMRegion>
     where
-        Perm: CheckPermission<Seq<u8>>,
+        Perm: CheckPermission<ID, Seq<u8>>,
         PMRegion: PersistentMemoryRegion
 {
     pub exec fn new(pm_region: PMRegion) -> (wrpm_region: Self)
@@ -358,6 +356,7 @@ impl<Perm, PMRegion> WriteRestrictedPersistentMemoryRegion<Perm, PMRegion>
     {
         Self {
             pm_region: pm_region,
+            id: None,
             perm: None
         }
     }

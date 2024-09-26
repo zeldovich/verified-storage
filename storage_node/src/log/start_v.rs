@@ -37,7 +37,7 @@ verus! {
     // to a CRC error.
     //
     // `Ok(b)` -- The CDB could be read and represents the boolean `b`.
-    pub fn read_cdb<Perm: CheckPermission<Seq<u8>>, WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<Perm>>(pm_region: &WRPMRegion) -> (result: Result<bool, LogErr>)
+    pub fn read_cdb<Perm: CheckPermission<ID, Seq<u8>>, ID, WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<Perm, ID>>(pm_region: &WRPMRegion) -> (result: Result<bool, LogErr>)
         requires
             pm_region.inv(),
             recover_cdb(pm_region@.committed()).is_Some(),
@@ -113,7 +113,7 @@ verus! {
     // The region's contents aren't valid, i.e., they're not
     // recoverable to a valid log. The user must have requested to
     // start using the wrong region of persistent memory.
-    pub fn read_log_variables<Perm: CheckPermission<Seq<u8>>, WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<Perm>>(
+    pub fn read_log_variables<Perm: CheckPermission<ID, Seq<u8>>, ID, WRPMRegion: WriteRestrictedPersistentMemoryRegionTrait<Perm, ID>>(
         pm_region: &WRPMRegion,
         log_id: u128,
         cdb: bool,

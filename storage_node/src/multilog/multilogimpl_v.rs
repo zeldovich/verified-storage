@@ -93,13 +93,13 @@ verus! {
         //
         // Most of the conjuncts in this invariant are defined in the
         // file `inv_v.rs`. See that file for detailed explanations.
-        pub closed spec fn inv<Perm, PMRegions>(
+        pub closed spec fn inv<ID, Perm, PMRegions>(
             &self,
-            wrpm_regions: &WriteRestrictedPersistentMemoryRegions<Perm, PMRegions>,
+            wrpm_regions: &WriteRestrictedPersistentMemoryRegions<ID, Perm, PMRegions>,
             multilog_id: u128,
         ) -> bool
             where
-                Perm: CheckPermission<Seq<Seq<u8>>>,
+                Perm: CheckPermission<ID, Seq<Seq<u8>>>,
                 PMRegions: PersistentMemoryRegions
         {
             &&& wrpm_regions.inv() // whatever the persistent memory regions require as an invariant
@@ -113,13 +113,13 @@ verus! {
                    ABSOLUTE_POS_OF_LOG_AREA < wrpm_regions@[i].len()
         }
 
-        pub proof fn lemma_inv_implies_wrpm_inv<Perm, PMRegions>(
+        pub proof fn lemma_inv_implies_wrpm_inv<ID, Perm, PMRegions>(
             &self,
-            wrpm_regions: &WriteRestrictedPersistentMemoryRegions<Perm, PMRegions>,
+            wrpm_regions: &WriteRestrictedPersistentMemoryRegions<ID, Perm, PMRegions>,
             multilog_id: u128
         )
             where
-                Perm: CheckPermission<Seq<Seq<u8>>>,
+                Perm: CheckPermission<ID, Seq<Seq<u8>>>,
                 PMRegions: PersistentMemoryRegions
             requires
                 self.inv(wrpm_regions, multilog_id)
@@ -127,13 +127,13 @@ verus! {
                 wrpm_regions.inv()
         {}
 
-        pub proof fn lemma_inv_implies_can_only_crash_as<Perm, PMRegions>(
+        pub proof fn lemma_inv_implies_can_only_crash_as<ID, Perm, PMRegions>(
             &self,
-            wrpm_regions: &WriteRestrictedPersistentMemoryRegions<Perm, PMRegions>,
+            wrpm_regions: &WriteRestrictedPersistentMemoryRegions<ID, Perm, PMRegions>,
             multilog_id: u128
         )
             where
-                Perm: CheckPermission<Seq<Seq<u8>>>,
+                Perm: CheckPermission<ID, Seq<Seq<u8>>>,
                 PMRegions: PersistentMemoryRegions
             requires
                 self.inv(wrpm_regions, multilog_id)
@@ -284,7 +284,7 @@ verus! {
         // how we can write `wrpm_regions`. This is moot, though,
         // because we don't ever write to the memory.
         pub exec fn start<PMRegions>(
-            wrpm_regions: &mut WriteRestrictedPersistentMemoryRegions<TrustedMultiLogPermission, PMRegions>,
+            wrpm_regions: &mut WriteRestrictedPersistentMemoryRegions<u8, TrustedMultiLogPermission, PMRegions>,
             multilog_id: u128,
             Tracked(perm): Tracked<&TrustedMultiLogPermission>,
             Ghost(state): Ghost<AbstractMultiLogState>,
@@ -387,7 +387,7 @@ verus! {
         // abstract state with all pending appends dropped.
         pub exec fn tentatively_append<PMRegions>(
             &mut self,
-            wrpm_regions: &mut WriteRestrictedPersistentMemoryRegions<TrustedMultiLogPermission, PMRegions>,
+            wrpm_regions: &mut WriteRestrictedPersistentMemoryRegions<u8, TrustedMultiLogPermission, PMRegions>,
             which_log: u32,
             bytes_to_append: &[u8],
             Ghost(multilog_id): Ghost<u128>,
@@ -626,7 +626,7 @@ verus! {
         // caller doesn't have to flush before calling this function.
         exec fn update_log_metadata<PMRegions>(
             &mut self,
-            wrpm_regions: &mut WriteRestrictedPersistentMemoryRegions<TrustedMultiLogPermission, PMRegions>,
+            wrpm_regions: &mut WriteRestrictedPersistentMemoryRegions<u8, TrustedMultiLogPermission, PMRegions>,
             Ghost(multilog_id): Ghost<u128>,
             Ghost(prev_infos): Ghost<Seq<LogInfo>>,
             Ghost(prev_state): Ghost<AbstractMultiLogState>,
@@ -808,7 +808,7 @@ verus! {
 
         fn update_inactive_log_metadata<PMRegions>(
             &mut self,
-            wrpm_regions: &mut WriteRestrictedPersistentMemoryRegions<TrustedMultiLogPermission, PMRegions>,
+            wrpm_regions: &mut WriteRestrictedPersistentMemoryRegions<u8, TrustedMultiLogPermission, PMRegions>,
             Ghost(multilog_id): Ghost<u128>,
             Ghost(prev_infos): Ghost<Seq<LogInfo>>,
             Ghost(prev_state): Ghost<AbstractMultiLogState>,
@@ -1090,7 +1090,7 @@ verus! {
         // committed.
         pub exec fn commit<PMRegions>(
             &mut self,
-            wrpm_regions: &mut WriteRestrictedPersistentMemoryRegions<TrustedMultiLogPermission, PMRegions>,
+            wrpm_regions: &mut WriteRestrictedPersistentMemoryRegions<u8, TrustedMultiLogPermission, PMRegions>,
             Ghost(multilog_id): Ghost<u128>,
             Tracked(perm): Tracked<&TrustedMultiLogPermission>,
         ) -> (result: Result<(), MultiLogErr>)
@@ -1188,7 +1188,7 @@ verus! {
         // advancing the head and then dropping all pending appends.
         pub exec fn advance_head<PMRegions>(
             &mut self,
-            wrpm_regions: &mut WriteRestrictedPersistentMemoryRegions<TrustedMultiLogPermission, PMRegions>,
+            wrpm_regions: &mut WriteRestrictedPersistentMemoryRegions<u8, TrustedMultiLogPermission, PMRegions>,
             which_log: u32,
             new_head: u128,
             Ghost(multilog_id): Ghost<u128>,
@@ -1444,16 +1444,16 @@ verus! {
         // vector containing the read bytes. It doesn't guarantee that
         // those bytes aren't corrupted by persistent memory corruption.
         // See `README.md` for more documentation and examples of its use.
-        pub exec fn read<Perm, PMRegions>(
+        pub exec fn read<ID, Perm, PMRegions>(
             &self,
-            wrpm_regions: &WriteRestrictedPersistentMemoryRegions<Perm, PMRegions>,
+            wrpm_regions: &WriteRestrictedPersistentMemoryRegions<ID, Perm, PMRegions>,
             which_log: u32,
             pos: u128,
             len: u64,
             Ghost(multilog_id): Ghost<u128>,
         ) -> (result: Result<Vec<u8>, MultiLogErr>)
             where
-                Perm: CheckPermission<Seq<Seq<u8>>>,
+                Perm: CheckPermission<ID, Seq<Seq<u8>>>,
                 PMRegions: PersistentMemoryRegions
             requires
                 self.inv(wrpm_regions, multilog_id),
@@ -1658,14 +1658,14 @@ verus! {
         // and capacity of one of the logs. See `README.md` for more
         // documentation and examples of its use.
         #[allow(unused_variables)]
-        pub exec fn get_head_tail_and_capacity<Perm, PMRegions>(
+        pub exec fn get_head_tail_and_capacity<ID, Perm, PMRegions>(
             &self,
-            wrpm_regions: &WriteRestrictedPersistentMemoryRegions<Perm, PMRegions>,
+            wrpm_regions: &WriteRestrictedPersistentMemoryRegions<ID, Perm, PMRegions>,
             which_log: u32,
             Ghost(multilog_id): Ghost<u128>,
         ) -> (result: Result<(u128, u128, u64), MultiLogErr>)
             where
-                Perm: CheckPermission<Seq<Seq<u8>>>,
+                Perm: CheckPermission<ID, Seq<Seq<u8>>>,
                 PMRegions: PersistentMemoryRegions
             requires
                 self.inv(wrpm_regions, multilog_id)

@@ -38,7 +38,7 @@ verus! {
         _phantom:  Ghost<core::marker::PhantomData<(PM, K, I, L, D, E)>>
     }
 
-    impl<PM, K, I, L, D, E> CheckPermission<Seq<Seq<u8>>> for TrustedKvPermission<PM, K, I, L, D, E>
+    impl<PM, K, I, L, D, E> CheckPermission<u8, Seq<Seq<u8>>> for TrustedKvPermission<PM, K, I, L, D, E>
         where
             PM: PersistentMemoryRegions,
             K: Hash + Eq + Clone + PmCopy + std::fmt::Debug,
@@ -51,6 +51,8 @@ verus! {
         {
             (self.is_state_allowable)(state)
         }
+
+        closed spec fn valid(&self, id: u8) -> bool { true }
     }
 
     impl<PM, K, I, L, D, E> TrustedKvPermission<PM, K, I, L, D, E>

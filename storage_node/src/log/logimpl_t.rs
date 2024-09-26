@@ -124,9 +124,14 @@ verus! {
         UntrustedLogImpl::recover(s, log_id) == Some(crash.state2)
     }
 
-    impl CheckPermission<Seq<u8>> for TrustedPermission {
+    impl CheckPermission<LogInvParam, Seq<u8>> for TrustedPermission {
         closed spec fn check_permission(&self, state: Seq<u8>) -> bool {
             recover_into(state, self.log_id, self.frac.val())
+        }
+
+        closed spec fn valid(&self, id: LogInvParam) -> bool {
+            self.frac.valid(id.crash_frac_id, 1) &&
+            self.log_id == id.log_id
         }
     }
 
@@ -146,6 +151,7 @@ verus! {
                 frac.val().state2 == state,
             ensures
                 perm.frac == frac,
+                perm.log_id == log_id,
                 forall |s| #[trigger] perm.check_permission(s) <==>
                     UntrustedLogImpl::recover(s, log_id) == Some(state)
         {
@@ -170,6 +176,7 @@ verus! {
                 frac.val().state2 == state2,
             ensures
                 perm.frac == frac,
+                perm.log_id == log_id,
                 forall |s| #[trigger] perm.check_permission(s) <==> {
                     ||| UntrustedLogImpl::recover(s, log_id) == Some(state1)
                     ||| UntrustedLogImpl::recover(s, log_id) == Some(state2)
@@ -378,7 +385,7 @@ verus! {
         }
     }
 
-    impl<PMRegion> WriteRestrictedPersistentMemoryRegionTrait<TrustedPermission> for WriteRestrictedPersistentMemoryRegionV2<PMRegion>
+    impl<PMRegion> WriteRestrictedPersistentMemoryRegionTrait<TrustedPermission, LogInvParam> for WriteRestrictedPersistentMemoryRegionV2<PMRegion>
         where
             PMRegion: PersistentMemoryRegionV2
     {
@@ -400,16 +407,9 @@ verus! {
             self.pm_region.constants()
         }
 
-        open spec fn same_as(&self, other: &Self) -> bool {
-            self.constants() == other.constants() &&
-            self.pm_region.id() == other.pm_region.id() &&
-            self.inv@.constant() == other.inv@.constant()
-        }
-
-        closed spec fn validperm(&self, p: &TrustedPermission) -> bool
+        open spec fn id(&self) -> LogInvParam
         {
-            p.frac.valid(self.inv@.constant().crash_frac_id, 1) &&
-            p.log_id == self.inv@.constant().log_id
+            self.inv@.constant()
         }
 
         exec fn get_region_size(&self) -> (result: u64)
@@ -477,6 +477,7 @@ verus! {
                 wrpm_region@ == frac.val(),
                 wrpm_region.frac == frac,
                 wrpm_region.constants() == pm_region.constants(),
+                wrpm_region.id() == inv.constant(),
         {
             Self {
                 pm_region: pm_region,
@@ -543,7 +544,7 @@ verus! {
             &&& self.abs@.valid(self.inv@.constant().crash_frac_id, 1)
             &&& self.abs@.val() == AbstractLogCrashState{ state1: self@.drop_pending_appends(), state2: self@.drop_pending_appends() }
             &&& self.wrpm_region.inv()
-            &&& self.wrpm_region.pm_region.id() == self.inv@.constant().pm_frac_id
+            &&& self.wrpm_region.inv@.constant() == self.inv@.constant()
             &&& self.log_id@ == self.inv@.constant().log_id
         }
 

@@ -108,10 +108,12 @@ verus! {
         ghost is_state_allowable: spec_fn(Seq<Seq<u8>>) -> bool
     }
 
-    impl CheckPermission<Seq<Seq<u8>>> for TrustedMultiLogPermission {
+    impl CheckPermission<u8, Seq<Seq<u8>>> for TrustedMultiLogPermission {
         closed spec fn check_permission(&self, state: Seq<Seq<u8>>) -> bool {
             (self.is_state_allowable)(state)
         }
+
+        closed spec fn valid(&self, id: u8) -> bool { true }
     }
 
     impl TrustedMultiLogPermission {
@@ -204,7 +206,7 @@ verus! {
     pub struct MultiLogImpl<PMRegions: PersistentMemoryRegions> {
         untrusted_log_impl: UntrustedMultiLogImpl,
         multilog_id: Ghost<u128>,
-        wrpm_regions: WriteRestrictedPersistentMemoryRegions<TrustedMultiLogPermission, PMRegions>
+        wrpm_regions: WriteRestrictedPersistentMemoryRegions<u8, TrustedMultiLogPermission, PMRegions>
     }
 
     impl <PMRegions: PersistentMemoryRegions> MultiLogImpl<PMRegions> {

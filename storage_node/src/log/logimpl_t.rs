@@ -847,6 +847,7 @@ verus! {
                         state2: self@.drop_pending_appends(),
                     });
                     inner.crash = abs.split_mut(1);
+                    inner.pm.agree(self.wrpm_region.frac.borrow());
                 });
             };
             self.abs = Tracked(abs);

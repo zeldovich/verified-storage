@@ -45,6 +45,7 @@ use crate::log::logspec_t::AbstractLogState;
 use crate::pmem::pmemspec_t::*;
 use crate::pmem::wrpm_t::*;
 use crate::pmem::pmemspec2_t::*;
+use crate::pmem::pmemadapt_v::*;
 use crate::pmem::pmcopy_t::*;
 use crate::pmem::frac_v::*;
 use builtin::*;
@@ -607,7 +608,9 @@ verus! {
     pub struct LogImpl<PMRegion: PersistentMemoryRegion> {
         untrusted_log_impl: UntrustedLogImpl,
         log_id: Ghost<u128>,
-        wrpm_region: WriteRestrictedPersistentMemoryRegion<u8, TrustedPermission, PMRegion>
+        wrpm_region: WriteRestrictedPersistentMemoryRegionV2<PMRegionV2<PMRegion>>,
+        abs: Tracked<FractionalResource<AbstractLogCrashState, 2>>,
+        inv: Tracked<Arc<AtomicInvariant<LogInvParam, LogInvState, LogInvPred>>>,
     }
 
     impl <PMRegion: PersistentMemoryRegion> LogImpl<PMRegion> {
@@ -641,6 +644,11 @@ verus! {
         pub closed spec fn valid(self) -> bool {
             &&& self.untrusted_log_impl.inv(&self.wrpm_region, self.log_id@)
             &&& crashes_as_abstract_state(self.wrpm_region@, self.log_id@, self@.drop_pending_appends())
+            &&& self.abs@.valid(self.inv@.constant().crash_frac_id, 1)
+            &&& self.abs@.val() == AbstractLogCrashState{ state1: self@.drop_pending_appends(), state2: self@.drop_pending_appends() }
+            &&& self.log_id@ == self.inv@.constant().log_id
+            &&& self.wrpm_region.inv()
+            &&& self.wrpm_region.id() == self.inv@.constant()
         }
 
         // The `setup` method sets up persistent memory regions
@@ -705,16 +713,48 @@ verus! {
             // it write such that, if a crash happens in the middle,
             // it doesn't change the persistent state.
 
+            let (mut pm_region2, Tracked(mut frac)) = PMRegionV2::new(pm_region);
+
             let ghost state = UntrustedLogImpl::recover(pm_region@.durable_state, log_id).get_Some_0();
-            let mut wrpm_region = WriteRestrictedPersistentMemoryRegion::new(pm_region);
-            let tracked perm = TrustedPermission::new_one_possibility(log_id, state);
+            let tracked abs = FractionalResource::<AbstractLogCrashState, 2>::alloc(AbstractLogCrashState{
+                state1: state,
+                state2: state,
+            });
+
+            let ghost iparam = LogInvParam {
+                pm_frac_id: pm_region2.id(),
+                crash_frac_id: abs.id(),
+                log_id: log_id,
+            };
+            let tracked istate = LogInvState {
+                pm: frac.split_mut(1),
+                crash: abs.split_mut(1),
+            };
+            let tracked inv = AtomicInvariant::<_, _, LogInvPred>::new(iparam, istate, PMEM_INV_NS as int);
+            let tracked inv = Arc::new(inv);
+
+            let mut wrpm_region = WriteRestrictedPersistentMemoryRegionV2::new(pm_region2, Tracked(frac), Tracked(inv.clone()));
+            let tracked perm = PermissionV2::new(&abs, iparam);
             let untrusted_log_impl =
                 UntrustedLogImpl::start(&mut wrpm_region, log_id, Tracked(&perm), Ghost(state))?;
+
+            open_atomic_invariant!(&inv => inner => { proof {
+                abs.combine_mut(inner.crash);
+                abs.update_mut(AbstractLogCrashState{
+                    state1: state.drop_pending_appends(),
+                    state2: state.drop_pending_appends(),
+                });
+                inner.crash = abs.split_mut(1);
+                inner.pm.agree(wrpm_region.frac.borrow());
+            }});
+
             Ok(
                 LogImpl {
                     untrusted_log_impl,
-                    log_id:  Ghost(log_id),
-                    wrpm_region
+                    log_id: Ghost(log_id),
+                    wrpm_region,
+                    abs: Tracked(abs),
+                    inv: Tracked(inv),
                 },
             )
         }
@@ -752,7 +792,7 @@ verus! {
             // such that, if a crash happens in the middle of a write,
             // the view of the persistent state is the current
             // state with pending appends dropped.
-            let tracked perm = TrustedPermission::new_one_possibility(self.log_id@, self@.drop_pending_appends());
+            let tracked perm = PermissionV2::new(self.abs.borrow(), self.inv@.constant());
             self.untrusted_log_impl.tentatively_append(&mut self.wrpm_region, bytes_to_append,
                                                        self.log_id, Tracked(&perm))
         }
@@ -780,9 +820,28 @@ verus! {
             // the view of the persistent state is either the current
             // state with all pending appends dropped or the current
             // state with all uncommitted appends committed.
-            let tracked perm = TrustedPermission::new_two_possibilities(self.log_id@, self@.drop_pending_appends(),
-                                                                        self@.commit().drop_pending_appends());
-            self.untrusted_log_impl.commit(&mut self.wrpm_region, self.log_id, Tracked(&perm))
+            open_atomic_invariant!(self.inv.borrow() => inner => { proof {
+                self.abs.borrow_mut().combine_mut(inner.crash);
+                self.abs.borrow_mut().update_mut(AbstractLogCrashState{
+                    state1: self@.drop_pending_appends(),
+                    state2: self@.commit().drop_pending_appends(),
+                });
+                inner.crash = self.abs.borrow_mut().split_mut(1);
+
+                assert forall |s| recover_into(s, self.log_id@, AbstractLogCrashState{ state1: self@.drop_pending_appends(), state2: self@.drop_pending_appends() }) implies #[trigger] recover_into(s, self.log_id@, self.abs@.val()) by {};
+            }});
+            let tracked perm = PermissionV2::new(self.abs.borrow(), self.inv@.constant());
+            let res = self.untrusted_log_impl.commit(&mut self.wrpm_region, self.log_id, Tracked(&perm));
+            open_atomic_invariant!(self.inv.borrow() => inner => { proof {
+                self.abs.borrow_mut().combine_mut(inner.crash);
+                self.abs.borrow_mut().update_mut(AbstractLogCrashState{
+                    state1: self@.drop_pending_appends(),
+                    state2: self@.drop_pending_appends(),
+                });
+                inner.crash = self.abs.borrow_mut().split_mut(1);
+                inner.pm.agree(self.wrpm_region.frac.borrow());
+            }});
+            res
         }
 
         // The `advance_head` method advances the head of the log to
@@ -821,13 +880,29 @@ verus! {
             // such that, if a crash happens in the middle of a write,
             // the view of the persistent state is either the current
             // state or the current state with the head advanced.
-            let tracked perm = TrustedPermission::new_two_possibilities(
-                self.log_id@,
-                self@.drop_pending_appends(),
-                self@.advance_head(new_head as int).drop_pending_appends()
-            );
-            self.untrusted_log_impl.advance_head(&mut self.wrpm_region, new_head,
-                                                 self.log_id, Tracked(&perm))
+            open_atomic_invariant!(self.inv.borrow() => inner => { proof {
+                self.abs.borrow_mut().combine_mut(inner.crash);
+                self.abs.borrow_mut().update_mut(AbstractLogCrashState{
+                    state1: self@.drop_pending_appends(),
+                    state2: self@.advance_head(new_head as int).drop_pending_appends(),
+                });
+                inner.crash = self.abs.borrow_mut().split_mut(1);
+
+                assert forall |s| recover_into(s, self.log_id@, AbstractLogCrashState{ state1: self@.drop_pending_appends(), state2: self@.drop_pending_appends() }) implies #[trigger] recover_into(s, self.log_id@, self.abs@.val()) by {};
+            }});
+            let tracked perm = PermissionV2::new(self.abs.borrow(), self.inv@.constant());
+            let res = self.untrusted_log_impl.advance_head(&mut self.wrpm_region, new_head,
+                                                           self.log_id, Tracked(&perm));
+            open_atomic_invariant!(self.inv.borrow() => inner => { proof {
+                self.abs.borrow_mut().combine_mut(inner.crash);
+                self.abs.borrow_mut().update_mut(AbstractLogCrashState{
+                    state1: self@.drop_pending_appends(),
+                    state2: self@.drop_pending_appends(),
+                });
+                inner.crash = self.abs.borrow_mut().split_mut(1);
+                inner.pm.agree(self.wrpm_region.frac.borrow());
+            }});
+            res
         }
 
         // The `read` method reads `len` bytes from the log starting

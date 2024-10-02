@@ -277,26 +277,23 @@ verus! {
         pub inv: Tracked<Arc<AtomicInvariant<LogInvParam, LogInvState, LogInvPred>>>,
     }
 
-    pub struct EmptyResult {}
-
     pub struct WRPMGetRegionSize<'a> {
         frac: &'a FractionalResource<PersistentMemoryRegionView, 3>,
     }
 
-    impl PMRegionGetSizeOperation<EmptyResult> for WRPMGetRegionSize<'_> {
+    impl PMRegionGetSizeOperation<()> for WRPMGetRegionSize<'_> {
         closed spec fn id(&self) -> int { self.frac.id() }
         closed spec fn pre(&self) -> bool {
             self.frac.inv()
         }
-        closed spec fn post(&self, r: EmptyResult, v: u64) -> bool {
+        closed spec fn post(&self, r: (), v: u64) -> bool {
             v == self.frac.val().len()
         }
 
         proof fn apply(tracked self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
-                       v: u64, tracked credit: OpenInvariantCredit) -> (tracked result: EmptyResult)
+                       v: u64, tracked credit: OpenInvariantCredit) -> (tracked result: ())
         {
             r.agree(self.frac);
-            EmptyResult{}
         }
     }
 
@@ -304,20 +301,19 @@ verus! {
         frac: &'a FractionalResource<PersistentMemoryRegionView, 3>,
     }
 
-    impl PMRegionFlushOperation<EmptyResult> for WRPMFlush<'_> {
+    impl PMRegionFlushOperation<()> for WRPMFlush<'_> {
         closed spec fn id(&self) -> int { self.frac.id() }
         closed spec fn pre(&self) -> bool {
             self.frac.inv()
         }
-        closed spec fn post(&self, r: EmptyResult) -> bool {
+        closed spec fn post(&self, r: ()) -> bool {
             self.frac.val().flush_predicted()
         }
 
         proof fn apply(tracked self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
-                       tracked credit: OpenInvariantCredit) -> (tracked result: EmptyResult)
+                       tracked credit: OpenInvariantCredit) -> (tracked result: ())
         {
             r.agree(self.frac);
-            EmptyResult{}
         }
     }
 
@@ -328,7 +324,7 @@ verus! {
         frac: &'a FractionalResource<PersistentMemoryRegionView, 3>,
     }
 
-    impl PMRegionReadOperation<EmptyResult> for WRPMReadUnaligned<'_> {
+    impl PMRegionReadOperation<()> for WRPMReadUnaligned<'_> {
         closed spec fn addr(&self) -> u64 { self.addr }
         closed spec fn num_bytes(&self) -> u64 { self.num_bytes }
         closed spec fn constants(&self) -> PersistentMemoryConstants { self.constants }
@@ -337,7 +333,7 @@ verus! {
             self.frac.inv() &&
             self.addr + self.num_bytes <= self.frac.val().len()
         }
-        closed spec fn post(&self, r: EmptyResult, v: Result<Vec<u8>, PmemError>) -> bool {
+        closed spec fn post(&self, r: (), v: Result<Vec<u8>, PmemError>) -> bool {
             match v {
                 Ok(bytes) => {
                     let true_bytes = self.frac.val().read_state.subrange(self.addr as int, self.addr + self.num_bytes);
@@ -364,10 +360,9 @@ verus! {
         }
 
         proof fn apply(tracked self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
-                       v: Result<Vec<u8>, PmemError>, tracked credit: OpenInvariantCredit) -> (tracked result: EmptyResult)
+                       v: Result<Vec<u8>, PmemError>, tracked credit: OpenInvariantCredit) -> (tracked result: ())
         {
             r.agree(self.frac);
-            EmptyResult{}
         }
     }
 
@@ -377,7 +372,7 @@ verus! {
         frac: &'a FractionalResource<PersistentMemoryRegionView, 3>,
     }
 
-    impl<S> PMRegionReadAlignedOperation<S, EmptyResult> for WRPMReadAligned<'_>
+    impl<S> PMRegionReadAlignedOperation<S, ()> for WRPMReadAligned<'_>
         where S: PmCopy
     {
         closed spec fn addr(&self) -> u64 { self.addr }
@@ -388,7 +383,7 @@ verus! {
             self.addr + S::spec_size_of() <= self.frac.val().len() &&
             S::bytes_parseable(self.frac.val().read_state.subrange(self.addr as int, self.addr + S::spec_size_of()))
         }
-        closed spec fn post(&self, r: EmptyResult, v: Result<MaybeCorruptedBytes<S>, PmemError>) -> bool {
+        closed spec fn post(&self, r: (), v: Result<MaybeCorruptedBytes<S>, PmemError>) -> bool {
             match v {
                 Ok(bytes) => {
                     let true_bytes = self.frac.val().read_state.subrange(self.addr as int, self.addr + S::spec_size_of());
@@ -415,10 +410,9 @@ verus! {
         }
 
         proof fn apply(tracked self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
-                       v: Result<MaybeCorruptedBytes<S>, PmemError>, tracked credit: OpenInvariantCredit) -> (tracked result: EmptyResult)
+                       v: Result<MaybeCorruptedBytes<S>, PmemError>, tracked credit: OpenInvariantCredit) -> (tracked result: ())
         {
             r.agree(self.frac);
-            EmptyResult{}
         }
     }
 

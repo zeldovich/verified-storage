@@ -266,7 +266,6 @@ verus! {
         // abstract state with pending tentative appends dropped.
         pub closed spec fn valid(self) -> bool {
             &&& self.untrusted_log_impl.inv(&self.wrpm_region, self.log_id@)
-            &&& crashes_as_abstract_state(self.wrpm_region@, self.log_id@, self@.drop_pending_appends())
             &&& self.abs@.valid(self.inv@.constant().crash_frac_id, 1)
             &&& self.abs@.val() == AbstractLogCrashState{ state1: self@.drop_pending_appends(), state2: self@.drop_pending_appends() }
             &&& self.log_id@ == self.inv@.constant().log_id

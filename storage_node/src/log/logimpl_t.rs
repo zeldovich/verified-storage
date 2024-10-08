@@ -99,71 +99,6 @@ verus! {
         UntrustedLogImpl::recover(pm_region_view.durable_state, log_id) == Some(state)
     }
 
-    // A `TrustedPermission` is the type of a tracked object
-    // indicating permission to update memory. It restricts updates so
-    // that if a crash happens, the resulting memory `mem` satisfies
-    // `is_state_allowable(mem)`.
-    //
-    // The struct is defined in this file, and it has a non-public
-    // field, so the only code that can create one is in this file.
-    // So untrusted code in other files can't create one, and we can
-    // rely on it to restrict access to persistent memory.
-    #[allow(dead_code)]
-    pub struct TrustedPermission {
-        ghost is_state_allowable: spec_fn(Seq<u8>) -> bool
-    }
-
-    impl CheckPermission<u8, Seq<u8>> for TrustedPermission {
-        closed spec fn check_permission(&self, state: Seq<u8>) -> bool {
-            (self.is_state_allowable)(state)
-        }
-
-        closed spec fn valid(&self, id: u8) -> bool {
-            true
-        }
-    }
-
-    impl TrustedPermission {
-
-        // This is one of two constructors for `TrustedPermission`.
-        // It conveys permission to do any update as long as a
-        // subsequent crash and recovery can only lead to given
-        // abstract state `state`.
-        proof fn new_one_possibility(log_id: u128, state: AbstractLogState) -> (tracked perm: Self)
-            ensures
-                forall |s| #[trigger] perm.check_permission(s) <==>
-                    UntrustedLogImpl::recover(s, log_id) == Some(state)
-        {
-            Self {
-                is_state_allowable: |s| UntrustedLogImpl::recover(s, log_id) == Some(state)
-            }
-        }
-
-        // This is the second of two constructors for
-        // `TrustedPermission`.  It conveys permission to do any
-        // update as long as a subsequent crash and recovery can only
-        // lead to one of two given abstract states `state1` and
-        // `state2`.
-        proof fn new_two_possibilities(
-            log_id: u128,
-            state1: AbstractLogState,
-            state2: AbstractLogState
-        ) -> (tracked perm: Self)
-            ensures
-                forall |s| #[trigger] perm.check_permission(s) <==> {
-                    ||| UntrustedLogImpl::recover(s, log_id) == Some(state1)
-                    ||| UntrustedLogImpl::recover(s, log_id) == Some(state2)
-                }
-        {
-            Self {
-                is_state_allowable: |s| {
-                    ||| UntrustedLogImpl::recover(s, log_id) == Some(state1)
-                    ||| UntrustedLogImpl::recover(s, log_id) == Some(state2)
-                }
-            }
-        }
-    }
-
     pub struct AbstractLogCrashState {
         state1: AbstractLogState,
         state2: AbstractLogState,
@@ -595,9 +530,9 @@ verus! {
     ///
     /// The `wrpm_region` field contains the write-restricted persistent
     /// memory. This memory will only allow updates allowed by a
-    /// tracked `TrustedPermission`. So we can pass `wrpm_region` to an
+    /// tracked `Permission`. So we can pass `wrpm_region` to an
     /// untrusted method, along with a restricting
-    /// `TrustedPermission`, to limit what it's allowed to do.
+    /// `Permission`, to limit what it's allowed to do.
 
     pub struct LogImpl<PMRegion: PersistentMemoryRegion> {
         untrusted_log_impl: UntrustedLogImpl,

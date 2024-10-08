@@ -16,7 +16,7 @@ use crate::pmem::pmemspec_t::{const_persistence_chunk_size, PersistentMemoryRegi
 use crate::pmem::pmemutil_v::{check_cdb, check_crc, no_outstanding_writes, extract_bytes};
 use crate::pmem::pmcopy_t::*;
 use crate::pmem::subregion_v::*;
-use crate::pmem::wrpm_t::*;
+use crate::pmem::wrpm_v::*;
 use crate::pmem::traits_t::size_of;
 use builtin::*;
 use builtin_macros::*;

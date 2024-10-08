@@ -15,7 +15,7 @@ use builtin_macros::*;
 //use kv::durable::list_v::*;
 //use kv::durable::itemtable_v::*;
 //use kv::durable::maintable_v::*;
-use pmem::wrpm_t::*;
+use pmem::wrpm_v::*;
 use vstd::pervasive::runtime_assert;
 use vstd::prelude::*;
 

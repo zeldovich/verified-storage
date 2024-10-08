@@ -5,7 +5,7 @@ use crate::log::logimpl_v::UntrustedLogImpl;
 use crate::log::logspec_t::AbstractLogState;
 use crate::log::logimpl_t::*;
 use crate::pmem::pmemspec_t::*;
-use crate::pmem::wrpm_t::*;
+use crate::pmem::wrpm_v::*;
 use crate::pmem::pmemspec2_t::*;
 use crate::pmem::pmemadapt_v::*;
 use crate::pmem::pmcopy_t::*;

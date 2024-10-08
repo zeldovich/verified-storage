@@ -13,6 +13,7 @@ use crate::log::logspec_t::AbstractLogState;
 use crate::log::setup_v::write_setup_metadata;
 use crate::log::start_v::{read_cdb, read_log_variables};
 use crate::pmem::pmemspec_t::*;
+use crate::pmem::pmem_prophspec_v::*;
 use crate::pmem::pmemutil_v::*;
 use crate::pmem::pmcopy_t::*;
 use crate::pmem::subregion_v::*;

@@ -6,3 +6,4 @@ pub mod logimpl_v;
 pub mod logspec_t;
 pub mod setup_v;
 pub mod start_v;
+pub mod wrpm_v;

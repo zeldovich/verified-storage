@@ -4,6 +4,7 @@
 use crate::pmem::pmcopy_t::*;
 use crate::pmem::frac_v::*;
 use crate::pmem::pmemspec_t::*;
+use crate::pmem::pmem_prophspec_v::*;
 use vstd::prelude::*;
 use vstd::invariant::*;
 

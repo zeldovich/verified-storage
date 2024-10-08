@@ -9,6 +9,7 @@ use crate::log::layout_v::*;
 use crate::log::logimpl_v::LogInfo;
 use crate::log::logspec_t::AbstractLogState;
 use crate::pmem::pmemspec_t::*;
+use crate::pmem::pmem_prophspec_v::*;
 use crate::pmem::pmemutil_v::*;
 use crate::pmem::pmcopy_t::*;
 use crate::pmem::subregion_v::*;

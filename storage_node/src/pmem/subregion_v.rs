@@ -1,5 +1,6 @@
 use crate::pmem::pmcopy_t::*;
 use crate::pmem::pmemspec_t::*;
+use crate::pmem::pmem_prophspec_v::*;
 use crate::pmem::pmemutil_v::*;
 use crate::pmem::wrpm_v::*;
 use builtin::*;

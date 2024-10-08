@@ -1,4 +1,5 @@
 use crate::pmem::pmemspec_t::*;
+use crate::pmem::pmem_prophspec_v::*;
 use crate::pmem::pmcopy_t::*;
 use core::ffi::c_void;
 use core::slice;

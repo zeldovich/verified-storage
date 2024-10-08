@@ -9,6 +9,7 @@
 
 use crate::pmem::pmcopy_t::*;
 use crate::pmem::pmemspec_t::*;
+use crate::pmem::pmem_prophspec_v::*;
 use crate::pmem::pmemspec2_t::*;
 use crate::pmem::frac_v::*;
 use vstd::prelude::*;

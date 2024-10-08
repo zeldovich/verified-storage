@@ -2,6 +2,7 @@ use builtin::*;
 use builtin_macros::*;
 use vstd::prelude::*;
 use crate::pmem::pmemspec_t::*;
+use crate::pmem::pmemutil_v::*;
 
 verus! {
 // vstd does not implement max for Seq<nat>

@@ -778,5 +778,13 @@ verus! {
             durable_state: v.read_state,
         }
     }
-    
-}
+
+    // This function extracts the subsequence of `bytes` that lie
+    // between `pos` and `pos + len` inclusive of `pos` but exclusive
+    // of `pos + len`.
+    pub open spec fn extract_bytes(bytes: Seq<u8>, pos: nat, len: nat) -> Seq<u8>
+    {
+        bytes.subrange(pos as int, (pos + len) as int)
+    }
+
+}

@@ -11,9 +11,9 @@ use crate::log::layout_v::*;
 use crate::log::logimpl_t::LogErr;
 use crate::log::logimpl_v::LogInfo;
 use crate::log::logspec_t::AbstractLogState;
-use crate::pmem::pmemspec_t::{const_persistence_chunk_size, extract_bytes, PersistentMemoryRegion,
+use crate::pmem::pmemspec_t::{const_persistence_chunk_size, PersistentMemoryRegion,
                               PmemError, spec_crc_bytes};
-use crate::pmem::pmemutil_v::{check_cdb, check_crc, no_outstanding_writes};
+use crate::pmem::pmemutil_v::{check_cdb, check_crc, no_outstanding_writes, extract_bytes};
 use crate::pmem::pmcopy_t::*;
 use crate::pmem::subregion_v::*;
 use crate::pmem::wrpm_t::*;

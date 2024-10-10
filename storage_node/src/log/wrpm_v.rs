@@ -72,7 +72,9 @@ verus! {
         frac: &'a FractionalResource<PersistentMemoryRegionView, 3>,
     }
 
-    impl PMRegionGetSizeOperation<()> for WRPMGetRegionSize<'_> {
+    impl PMRegionGetSizeOperation for WRPMGetRegionSize<'_> {
+        type Result = ();
+
         closed spec fn id(&self) -> int { self.frac.id() }
         closed spec fn pre(&self) -> bool {
             self.frac.inv()
@@ -92,7 +94,9 @@ verus! {
         frac: &'a FractionalResource<PersistentMemoryRegionView, 3>,
     }
 
-    impl PMRegionFlushOperation<()> for WRPMFlush<'_> {
+    impl PMRegionFlushOperation for WRPMFlush<'_> {
+        type Result = ();
+
         closed spec fn id(&self) -> int { self.frac.id() }
         closed spec fn pre(&self) -> bool {
             self.frac.inv()
@@ -115,7 +119,9 @@ verus! {
         frac: &'a FractionalResource<PersistentMemoryRegionView, 3>,
     }
 
-    impl PMRegionReadOperation<()> for WRPMReadUnaligned<'_> {
+    impl PMRegionReadOperation for WRPMReadUnaligned<'_> {
+        type Result = ();
+
         closed spec fn addr(&self) -> u64 { self.addr }
         closed spec fn num_bytes(&self) -> u64 { self.num_bytes }
         closed spec fn constants(&self) -> PersistentMemoryConstants { self.constants }
@@ -163,9 +169,11 @@ verus! {
         frac: &'a FractionalResource<PersistentMemoryRegionView, 3>,
     }
 
-    impl<S> PMRegionReadAlignedOperation<S, ()> for WRPMReadAligned<'_>
+    impl<S> PMRegionReadAlignedOperation<S> for WRPMReadAligned<'_>
         where S: PmCopy
     {
+        type Result = ();
+
         closed spec fn addr(&self) -> u64 { self.addr }
         closed spec fn constants(&self) -> PersistentMemoryConstants { self.constants }
         closed spec fn id(&self) -> int { self.frac.id() }
@@ -207,10 +215,6 @@ verus! {
         }
     }
 
-    pub struct WriteResult {
-        frac: FractionalResource<PersistentMemoryRegionView, 3>,
-    }
-
     pub struct WRPMWrite<'a> {
         ghost addr: u64,
         ghost bytes: Seq<u8>,
@@ -219,7 +223,9 @@ verus! {
         tracked perm: &'a PermissionV2<'a>,
     }
 
-    impl PMRegionWriteOperation<WriteResult> for WRPMWrite<'_> {
+    impl PMRegionWriteOperation for WRPMWrite<'_> {
+        type Result = FractionalResource<PersistentMemoryRegionView, 3>;
+
         closed spec fn addr(&self) -> u64 { self.addr }
         closed spec fn bytes(&self) -> Seq<u8> { self.bytes }
         closed spec fn id(&self) -> int { self.frac.id() }
@@ -231,9 +237,9 @@ verus! {
             forall |s| can_result_from_partial_write(s, self.frac.val().durable_state, self.addr() as int, self.bytes())
                   ==> #[trigger] self.perm.check_permission(s)
         }
-        closed spec fn post(&self, r: WriteResult) -> bool {
-            r.frac.valid(self.frac.id(), 1) &&
-            r.frac.val().can_result_from_write(self.frac.val(), self.addr() as int, self.bytes())
+        closed spec fn post(&self, r: Self::Result) -> bool {
+            r.valid(self.frac.id(), 1) &&
+            r.val().can_result_from_write(self.frac.val(), self.addr() as int, self.bytes())
         }
 
         proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
@@ -244,7 +250,7 @@ verus! {
 
         proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 3>,
                        newv: PersistentMemoryRegionView,
-                       tracked credit: OpenInvariantCredit) -> (tracked result: WriteResult)
+                       tracked credit: OpenInvariantCredit) -> (tracked result: Self::Result)
         {
             r.combine_mut(self.frac);
             open_atomic_invariant!(credit => &self.loginv => inner => {
@@ -256,9 +262,7 @@ verus! {
                 assert forall |s| self.perm.check_permission(s) implies
                     #[trigger] recover_into(s, self.loginv.constant().log_id, inner.crash.val()) by {};
             });
-            WriteResult{
-                frac: r.split_mut(1)
-            }
+            r.split_mut(1)
         }
     }
 
@@ -292,7 +296,7 @@ verus! {
         exec fn get_region_size(&self) -> (result: u64)
         {
             let tracked op = WRPMGetRegionSize{ frac: self.frac.borrow() };
-            let (result, Tracked(opres)) = self.pm_region.get_region_size::<_, WRPMGetRegionSize>(Tracked(op));
+            let (result, Tracked(opres)) = self.pm_region.get_region_size::<WRPMGetRegionSize>(Tracked(op));
             result
         }
 
@@ -306,8 +310,8 @@ verus! {
                 loginv: self.inv.borrow(),
                 perm: perm,
             };
-            let Tracked(opres) = self.pm_region.write::<_, WRPMWrite>(addr, bytes, Tracked(op));
-            self.frac = Tracked(opres.frac);
+            let Tracked(opres) = self.pm_region.write::<WRPMWrite>(addr, bytes, Tracked(op));
+            self.frac = Tracked(opres);
         }
 
         exec fn serialize_and_write<S>(&mut self, addr: u64, to_write: &S, Tracked(perm): Tracked<&PermissionV2>)
@@ -324,27 +328,27 @@ verus! {
                 loginv: self.inv.borrow(),
                 perm: perm,
             };
-            let Tracked(opres) = self.pm_region.serialize_and_write::<S, _, WRPMWrite>(addr, to_write, Tracked(op));
-            self.frac = Tracked(opres.frac);
+            let Tracked(opres) = self.pm_region.serialize_and_write::<S, WRPMWrite>(addr, to_write, Tracked(op));
+            self.frac = Tracked(opres);
         }
 
         exec fn flush(&mut self) {
             let tracked op = WRPMFlush{ frac: self.frac.borrow() };
-            let Tracked(opres) = self.pm_region.flush::<_, WRPMFlush>(Tracked(op));
+            let Tracked(opres) = self.pm_region.flush::<WRPMFlush>(Tracked(op));
         }
 
         exec fn read_aligned<S>(&self, addr: u64) -> (bytes: Result<MaybeCorruptedBytes<S>, PmemError>)
             where S: PmCopy + Sized
         {
             let tracked op = WRPMReadAligned{ addr: addr, constants: self.pm_region.constants(), frac: self.frac.borrow() };
-            let (result, Tracked(opres)) = self.pm_region.read_aligned::<S, _, WRPMReadAligned>(addr, Tracked(op));
+            let (result, Tracked(opres)) = self.pm_region.read_aligned::<S, WRPMReadAligned>(addr, Tracked(op));
             result
         }
 
         exec fn read_unaligned(&self, addr: u64, num_bytes: u64) -> (bytes: Result<Vec<u8>, PmemError>)
         {
             let tracked op = WRPMReadUnaligned{ addr: addr, num_bytes: num_bytes, constants: self.pm_region.constants(), frac: self.frac.borrow() };
-            let (result, Tracked(opres)) = self.pm_region.read_unaligned::<_, WRPMReadUnaligned>(addr, num_bytes, Tracked(op));
+            let (result, Tracked(opres)) = self.pm_region.read_unaligned::<WRPMReadUnaligned>(addr, num_bytes, Tracked(op));
             result
         }
     }

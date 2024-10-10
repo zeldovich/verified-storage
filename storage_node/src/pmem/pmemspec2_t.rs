@@ -11,12 +11,14 @@ verus! {
 
     pub const PMEM_INV_NS: u64 = 12345;
 
-    pub trait PMRegionGetSizeOperation<ResultT> where Self: Sized {
+    pub trait PMRegionGetSizeOperation where Self: Sized {
+        type Result;
+
         spec fn id(&self) -> int;
         spec fn pre(&self) -> bool;
-        spec fn post(&self, r: ResultT, v: u64) -> bool;
+        spec fn post(&self, r: Self::Result, v: u64) -> bool;
         proof fn apply(tracked self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
-                       v: u64, tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
+                       v: u64, tracked credit: OpenInvariantCredit) -> (tracked result: Self::Result)
             requires
                 self.pre(),
                 r.valid(self.id(), 1),
@@ -27,13 +29,15 @@ verus! {
                 [ PMEM_INV_NS ];
     }
 
-    pub trait PMRegionReadOperation<ResultT> where Self: Sized {
+    pub trait PMRegionReadOperation where Self: Sized {
+        type Result;
+
         spec fn addr(&self) -> u64;
         spec fn num_bytes(&self) -> u64;
         spec fn constants(&self) -> PersistentMemoryConstants;
         spec fn id(&self) -> int;
         spec fn pre(&self) -> bool;
-        spec fn post(&self, r: ResultT, v: Result<Vec<u8>, PmemError>) -> bool;
+        spec fn post(&self, r: Self::Result, v: Result<Vec<u8>, PmemError>) -> bool;
         proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
                           tracked credit: OpenInvariantCredit)
             requires
@@ -44,7 +48,7 @@ verus! {
             opens_invariants
                 [ PMEM_INV_NS ];
         proof fn apply(tracked self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
-                       v: Result<Vec<u8>, PmemError>, tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
+                       v: Result<Vec<u8>, PmemError>, tracked credit: OpenInvariantCredit) -> (tracked result: Self::Result)
             requires
                 self.pre(),
                 r.valid(self.id(), 1),
@@ -71,12 +75,14 @@ verus! {
                 [ PMEM_INV_NS ];
     }
 
-    pub trait PMRegionReadAlignedOperation<S, ResultT> where S: PmCopy, Self: Sized {
+    pub trait PMRegionReadAlignedOperation<S> where S: PmCopy, Self: Sized {
+        type Result;
+
         spec fn addr(&self) -> u64;
         spec fn constants(&self) -> PersistentMemoryConstants;
         spec fn id(&self) -> int;
         spec fn pre(&self) -> bool;
-        spec fn post(&self, r: ResultT, v: Result<MaybeCorruptedBytes<S>, PmemError>) -> bool;
+        spec fn post(&self, r: Self::Result, v: Result<MaybeCorruptedBytes<S>, PmemError>) -> bool;
         proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
                           tracked credit: OpenInvariantCredit)
             requires
@@ -90,7 +96,7 @@ verus! {
                 [ PMEM_INV_NS ];
         proof fn apply(tracked self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
                        v: Result<MaybeCorruptedBytes<S>, PmemError>,
-                       tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
+                       tracked credit: OpenInvariantCredit) -> (tracked result: Self::Result)
             requires
                 self.pre(),
                 r.valid(self.id(), 1),
@@ -117,12 +123,14 @@ verus! {
                 [ PMEM_INV_NS ];
     }
 
-    pub trait PMRegionWriteOperation<ResultT> where Self: Sized {
+    pub trait PMRegionWriteOperation where Self: Sized {
+        type Result;
+
         spec fn addr(&self) -> u64;
         spec fn bytes(&self) -> Seq<u8>;
         spec fn id(&self) -> int;
         spec fn pre(&self) -> bool;
-        spec fn post(&self, r: ResultT) -> bool;
+        spec fn post(&self, r: Self::Result) -> bool;
         proof fn validate(tracked &self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
                           tracked credit: OpenInvariantCredit)
             requires
@@ -134,7 +142,7 @@ verus! {
                 [ PMEM_INV_NS ];
         proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 3>,
                        newv: PersistentMemoryRegionView,
-                       tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
+                       tracked credit: OpenInvariantCredit) -> (tracked result: Self::Result)
             requires
                 self.pre(),
                 old(r).valid(self.id(), 1),
@@ -147,12 +155,14 @@ verus! {
                 [ PMEM_INV_NS ];
     }
 
-    pub trait PMRegionFlushOperation<ResultT> where Self: Sized {
+    pub trait PMRegionFlushOperation where Self: Sized {
+        type Result;
+
         spec fn id(&self) -> int;
         spec fn pre(&self) -> bool;
-        spec fn post(&self, r: ResultT) -> bool;
+        spec fn post(&self, r: Self::Result) -> bool;
         proof fn apply(tracked self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
-                       tracked credit: OpenInvariantCredit) -> (tracked result: ResultT)
+                       tracked credit: OpenInvariantCredit) -> (tracked result: Self::Result)
             requires
                 self.pre(),
                 r.valid(self.id(), 1),
@@ -171,9 +181,9 @@ verus! {
 
         spec fn constants(&self) -> PersistentMemoryConstants;
 
-        fn get_region_size<ResultT, Op>(&self, Tracked(op): Tracked<Op>) -> (result: (u64, Tracked<ResultT>))
+        fn get_region_size<Op>(&self, Tracked(op): Tracked<Op>) -> (result: (u64, Tracked<Op::Result>))
             where
-                Op: PMRegionGetSizeOperation<ResultT>,
+                Op: PMRegionGetSizeOperation,
             requires
                 self.inv(),
                 op.pre(),
@@ -182,9 +192,9 @@ verus! {
                 op.post(result.1@, result.0),
         ;
 
-        fn read_unaligned<ResultT, Op>(&self, addr: u64, num_bytes: u64, Tracked(op): Tracked<Op>) -> (result: (Result<Vec<u8>, PmemError>, Tracked<ResultT>))
+        fn read_unaligned<Op>(&self, addr: u64, num_bytes: u64, Tracked(op): Tracked<Op>) -> (result: (Result<Vec<u8>, PmemError>, Tracked<Op::Result>))
             where
-                Op: PMRegionReadOperation<ResultT>,
+                Op: PMRegionReadOperation,
             requires
                 self.inv(),
                 op.pre(),
@@ -196,9 +206,9 @@ verus! {
                 op.post(result.1@, result.0),
         ;
 
-        fn write<ResultT, Op>(&mut self, addr: u64, bytes: &[u8], Tracked(op): Tracked<Op>) -> (result: Tracked<ResultT>)
+        fn write<Op>(&mut self, addr: u64, bytes: &[u8], Tracked(op): Tracked<Op>) -> (result: Tracked<Op::Result>)
             where
-                Op: PMRegionWriteOperation<ResultT>,
+                Op: PMRegionWriteOperation,
             requires
                 old(self).inv(),
                 op.pre(),
@@ -212,9 +222,9 @@ verus! {
                 op.post(result@),
         ;
 
-        fn flush<ResultT, Op>(&mut self, Tracked(op): Tracked<Op>) -> (result: Tracked<ResultT>)
+        fn flush<Op>(&mut self, Tracked(op): Tracked<Op>) -> (result: Tracked<Op::Result>)
             where
-                Op: PMRegionFlushOperation<ResultT>,
+                Op: PMRegionFlushOperation,
             requires
                 old(self).inv(),
                 op.pre(),
@@ -226,10 +236,10 @@ verus! {
                 op.post(result@),
         ;
 
-        fn read_aligned<S, ResultT, Op>(&self, addr: u64, Tracked(op): Tracked<Op>) -> (result: (Result<MaybeCorruptedBytes<S>, PmemError>, Tracked<ResultT>))
+        fn read_aligned<S, Op>(&self, addr: u64, Tracked(op): Tracked<Op>) -> (result: (Result<MaybeCorruptedBytes<S>, PmemError>, Tracked<Op::Result>))
             where
                 S: PmCopy,
-                Op: PMRegionReadAlignedOperation<S, ResultT>,
+                Op: PMRegionReadAlignedOperation<S>,
             requires
                 self.inv(),
                 op.pre(),
@@ -240,10 +250,10 @@ verus! {
                 op.post(result.1@, result.0),
         ;
 
-        fn serialize_and_write<S, ResultT, Op>(&mut self, addr: u64, to_write: &S, Tracked(op): Tracked<Op>) -> (result: Tracked<ResultT>)
+        fn serialize_and_write<S, Op>(&mut self, addr: u64, to_write: &S, Tracked(op): Tracked<Op>) -> (result: Tracked<Op::Result>)
             where
                 S: PmCopy,
-                Op: PMRegionWriteOperation<ResultT>,
+                Op: PMRegionWriteOperation,
             requires
                 old(self).inv(),
                 op.pre(),

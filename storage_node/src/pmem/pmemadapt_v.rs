@@ -46,9 +46,9 @@ verus! {
             self.pm.constants()
         }
 
-        exec fn get_region_size<ResultT, Op>(&self, Tracked(op): Tracked<Op>) -> (result: (u64, Tracked<ResultT>))
+        exec fn get_region_size<Op>(&self, Tracked(op): Tracked<Op>) -> (result: (u64, Tracked<Op::Result>))
             where
-                Op: PMRegionGetSizeOperation<ResultT>
+                Op: PMRegionGetSizeOperation
         {
             let r = self.pm.get_region_size();
             let Tracked(credit) = create_open_invariant_credit();
@@ -56,9 +56,9 @@ verus! {
             (r, Tracked(tr))
         }
 
-        exec fn read_unaligned<ResultT, Op>(&self, addr: u64, num_bytes: u64, Tracked(op): Tracked<Op>) -> (result: (Result<Vec<u8>, PmemError>, Tracked<ResultT>))
+        exec fn read_unaligned<Op>(&self, addr: u64, num_bytes: u64, Tracked(op): Tracked<Op>) -> (result: (Result<Vec<u8>, PmemError>, Tracked<Op::Result>))
             where
-                Op: PMRegionReadOperation<ResultT>
+                Op: PMRegionReadOperation
         {
             let Tracked(credit) = create_open_invariant_credit();
             let tracked tr = op.validate(self.frac.borrow(), credit);
@@ -69,9 +69,9 @@ verus! {
             (r, Tracked(tr))
         }
 
-        exec fn write<ResultT, Op>(&mut self, addr: u64, bytes: &[u8], Tracked(op): Tracked<Op>) -> (result: Tracked<ResultT>)
+        exec fn write<Op>(&mut self, addr: u64, bytes: &[u8], Tracked(op): Tracked<Op>) -> (result: Tracked<Op::Result>)
             where
-                Op: PMRegionWriteOperation<ResultT>
+                Op: PMRegionWriteOperation
         {
             let Tracked(credit) = create_open_invariant_credit();
             let tracked tr = op.validate(self.frac.borrow(), credit);
@@ -82,9 +82,9 @@ verus! {
             Tracked(tr)
         }
 
-        exec fn flush<ResultT, Op>(&mut self, Tracked(op): Tracked<Op>) -> (result: Tracked<ResultT>)
+        exec fn flush<Op>(&mut self, Tracked(op): Tracked<Op>) -> (result: Tracked<Op::Result>)
             where
-                Op: PMRegionFlushOperation<ResultT>
+                Op: PMRegionFlushOperation
         {
             self.pm.flush();
             let Tracked(credit) = create_open_invariant_credit();
@@ -92,10 +92,10 @@ verus! {
             Tracked(tr)
         }
 
-        exec fn read_aligned<S, ResultT, Op>(&self, addr: u64, Tracked(op): Tracked<Op>) -> (result: (Result<MaybeCorruptedBytes<S>, PmemError>, Tracked<ResultT>))
+        exec fn read_aligned<S, Op>(&self, addr: u64, Tracked(op): Tracked<Op>) -> (result: (Result<MaybeCorruptedBytes<S>, PmemError>, Tracked<Op::Result>))
             where
                 S: PmCopy,
-                Op: PMRegionReadAlignedOperation<S, ResultT>,
+                Op: PMRegionReadAlignedOperation<S>,
         {
             let Tracked(credit) = create_open_invariant_credit();
             let tracked tr = op.validate(self.frac.borrow(), credit);
@@ -106,10 +106,10 @@ verus! {
             (r, Tracked(tr))
         }
 
-        exec fn serialize_and_write<S, ResultT, Op>(&mut self, addr: u64, to_write: &S, Tracked(op): Tracked<Op>) -> (result: Tracked<ResultT>)
+        exec fn serialize_and_write<S, Op>(&mut self, addr: u64, to_write: &S, Tracked(op): Tracked<Op>) -> (result: Tracked<Op::Result>)
             where
                 S: PmCopy,
-                Op: PMRegionWriteOperation<ResultT>,
+                Op: PMRegionWriteOperation,
         {
             broadcast use axiom_bytes_len;
 

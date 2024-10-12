@@ -8,12 +8,10 @@ use vstd::prelude::*;
 use vstd::invariant::*;
 
 verus! {
-
-    pub const PMEM_INV_NS: u64 = 12345;
-
     pub trait PMRegionGetSizeOperation where Self: Sized {
         type Result;
 
+        spec fn namespace(&self) -> int;
         spec fn id(&self) -> int;
         spec fn pre(&self) -> bool;
         spec fn post(&self, r: Self::Result, v: u64) -> bool;
@@ -26,12 +24,13 @@ verus! {
             ensures
                 self.post(result, v),
             opens_invariants
-                [ PMEM_INV_NS ];
+                [ self.namespace() ];
     }
 
     pub trait PMRegionReadOperation where Self: Sized {
         type Result;
 
+        spec fn namespace(&self) -> int;
         spec fn addr(&self) -> u64;
         spec fn num_bytes(&self) -> u64;
         spec fn constants(&self) -> PersistentMemoryConstants;
@@ -46,7 +45,7 @@ verus! {
             ensures
                 self.addr() + self.num_bytes() <= r.val().len(),
             opens_invariants
-                [ PMEM_INV_NS ];
+                [ self.namespace() ];
         proof fn apply(tracked self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
                        v: Result<Vec<u8>, PmemError>, tracked credit: OpenInvariantCredit) -> (tracked result: Self::Result)
             requires
@@ -72,12 +71,13 @@ verus! {
             ensures
                 self.post(result, v),
             opens_invariants
-                [ PMEM_INV_NS ];
+                [ self.namespace() ];
     }
 
     pub trait PMRegionReadAlignedOperation<S> where S: PmCopy, Self: Sized {
         type Result;
 
+        spec fn namespace(&self) -> int;
         spec fn addr(&self) -> u64;
         spec fn constants(&self) -> PersistentMemoryConstants;
         spec fn id(&self) -> int;
@@ -93,7 +93,7 @@ verus! {
                 // We must have previously written a serialized S to this addr
                 S::bytes_parseable(r.val().read_state.subrange(self.addr() as int, self.addr() + S::spec_size_of())),
             opens_invariants
-                [ PMEM_INV_NS ];
+                [ self.namespace() ];
         proof fn apply(tracked self, tracked r: &FractionalResource<PersistentMemoryRegionView, 3>,
                        v: Result<MaybeCorruptedBytes<S>, PmemError>,
                        tracked credit: OpenInvariantCredit) -> (tracked result: Self::Result)
@@ -120,12 +120,13 @@ verus! {
             ensures
                 self.post(result, v),
             opens_invariants
-                [ PMEM_INV_NS ];
+                [ self.namespace() ];
     }
 
     pub trait PMRegionWriteOperation where Self: Sized {
         type Result;
 
+        spec fn namespace(&self) -> int;
         spec fn addr(&self) -> u64;
         spec fn bytes(&self) -> Seq<u8>;
         spec fn id(&self) -> int;
@@ -139,7 +140,7 @@ verus! {
             ensures
                 self.addr() + self.bytes().len() <= r.val().len(),
             opens_invariants
-                [ PMEM_INV_NS ];
+                [ self.namespace() ];
         proof fn apply(tracked self, tracked r: &mut FractionalResource<PersistentMemoryRegionView, 3>,
                        newv: PersistentMemoryRegionView,
                        tracked credit: OpenInvariantCredit) -> (tracked result: Self::Result)
@@ -152,12 +153,13 @@ verus! {
                 r.val() == newv,
                 self.post(result),
             opens_invariants
-                [ PMEM_INV_NS ];
+                [ self.namespace() ];
     }
 
     pub trait PMRegionFlushOperation where Self: Sized {
         type Result;
 
+        spec fn namespace(&self) -> int;
         spec fn id(&self) -> int;
         spec fn pre(&self) -> bool;
         spec fn post(&self, r: Self::Result) -> bool;
@@ -170,7 +172,7 @@ verus! {
             ensures
                 self.post(result),
             opens_invariants
-                [ PMEM_INV_NS ];
+                [ self.namespace() ];
     }
 
     pub trait PersistentMemoryRegionV2

@@ -75,6 +75,7 @@ verus! {
     impl PMRegionGetSizeOperation for WRPMGetRegionSize<'_> {
         type Result = ();
 
+        closed spec fn namespace(&self) -> int { 0 }
         closed spec fn id(&self) -> int { self.frac.id() }
         closed spec fn pre(&self) -> bool {
             self.frac.inv()
@@ -97,6 +98,7 @@ verus! {
     impl PMRegionFlushOperation for WRPMFlush<'_> {
         type Result = ();
 
+        closed spec fn namespace(&self) -> int { 0 }
         closed spec fn id(&self) -> int { self.frac.id() }
         closed spec fn pre(&self) -> bool {
             self.frac.inv()
@@ -122,6 +124,7 @@ verus! {
     impl PMRegionReadOperation for WRPMReadUnaligned<'_> {
         type Result = ();
 
+        closed spec fn namespace(&self) -> int { 0 }
         closed spec fn addr(&self) -> u64 { self.addr }
         closed spec fn num_bytes(&self) -> u64 { self.num_bytes }
         closed spec fn constants(&self) -> PersistentMemoryConstants { self.constants }
@@ -174,6 +177,7 @@ verus! {
     {
         type Result = ();
 
+        closed spec fn namespace(&self) -> int { 0 }
         closed spec fn addr(&self) -> u64 { self.addr }
         closed spec fn constants(&self) -> PersistentMemoryConstants { self.constants }
         closed spec fn id(&self) -> int { self.frac.id() }
@@ -226,12 +230,12 @@ verus! {
     impl PMRegionWriteOperation for WRPMWrite<'_> {
         type Result = FractionalResource<PersistentMemoryRegionView, 3>;
 
+        closed spec fn namespace(&self) -> int { self.loginv.namespace() }
         closed spec fn addr(&self) -> u64 { self.addr }
         closed spec fn bytes(&self) -> Seq<u8> { self.bytes }
         closed spec fn id(&self) -> int { self.frac.id() }
         closed spec fn pre(&self) -> bool {
             self.addr() + self.bytes().len() <= self.frac.val().len() &&
-            self.loginv.namespace() == PMEM_INV_NS &&
             self.frac.valid(self.loginv.constant().pm_frac_id, 1) &&
             self.perm.valid(self.loginv.constant()) &&
             forall |s| can_result_from_partial_write(s, self.frac.val().durable_state, self.addr() as int, self.bytes())
@@ -279,7 +283,6 @@ verus! {
         {
             self.pm_region.inv() &&
             self.frac@.valid(self.pm_region.id(), 1) &&
-            self.inv@.namespace() == PMEM_INV_NS &&
             self.inv@.constant().pm_frac_id == self.pm_region.id()
         }
 
@@ -363,7 +366,6 @@ verus! {
             requires
                 pm_region.inv(),
                 frac.valid(pm_region.id(), 1),
-                inv.namespace() == PMEM_INV_NS,
                 inv.constant().pm_frac_id == pm_region.id(),
             ensures
                 wrpm_region.inv(),

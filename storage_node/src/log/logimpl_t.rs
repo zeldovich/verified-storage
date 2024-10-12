@@ -352,7 +352,7 @@ verus! {
                 pm: frac.split_mut(1),
                 crash: abs.split_mut(1),
             };
-            let tracked inv = AtomicInvariant::<_, _, LogInvPred>::new(iparam, istate, PMEM_INV_NS as int);
+            let tracked inv = AtomicInvariant::<_, _, LogInvPred>::new(iparam, istate, 12345);
             let tracked inv = Arc::new(inv);
 
             let mut wrpm_region = WriteRestrictedPersistentMemoryRegionV2::new(pm_region2, Tracked(frac), Tracked(inv.clone()));

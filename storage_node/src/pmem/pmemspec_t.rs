@@ -208,33 +208,41 @@ verus! {
 
     /// We model the state of each byte of persistent memory as
     /// follows. `state_at_last_flush` contains the contents
-    /// immediately after the most recent flush. `outstanding_write`
-    /// contains `None` if there's no outstanding write, or `Some(b)`
-    /// if there's an outstanding write of `b`. We don't model the
-    /// possibility of there being multiple outstanding writes because
-    /// we restrict reads and writes to not be allowed at locations
-    /// with currently outstanding writes.
+    /// immediately after the most recent flush. `outstanding_writes`
+    /// contains a sequence of outstanding writes, in order they were
+    /// written.
+
+    pub type WriteID = nat;
 
     #[verifier::ext_equal]
     pub struct PersistentMemoryByte {
         pub state_at_last_flush: u8,
-        pub outstanding_write: Option<u8>,
+        pub outstanding_writes: Seq<(WriteID, u8)>,
     }
 
     impl PersistentMemoryByte {
-        pub open spec fn write(self, byte: u8) -> Self
+        pub open spec fn write(self, byte: u8, write_id: WriteID) -> Self
         {
             Self {
                 state_at_last_flush: self.state_at_last_flush,
-                outstanding_write: Some(byte),
+                outstanding_writes: self.outstanding_writes.push((write_id, byte)),
+            }
+        }
+
+        pub open spec fn keep_writes(self, keep: Set<WriteID>) -> Self
+        {
+            Self {
+                state_at_last_flush: self.state_at_last_flush,
+                outstanding_writes: self.outstanding_writes.filter(|w: (WriteID, u8)| keep has w.0),
             }
         }
 
         pub open spec fn flush_byte(self) -> u8
         {
-            match self.outstanding_write {
-                None => self.state_at_last_flush,
-                Some(b) => b
+            if self.outstanding_writes.len() == 0 {
+                self.state_at_last_flush
+            } else {
+                self.outstanding_writes.last().1
             }
         }
 
@@ -242,7 +250,7 @@ verus! {
         {
             Self {
                 state_at_last_flush: self.flush_byte(),
-                outstanding_write: None,
+                outstanding_writes: Seq::<(WriteID, u8)>::empty(),
             }
         }
     }
@@ -255,6 +263,7 @@ verus! {
     pub struct PersistentMemoryRegionRawView
     {
         pub state: Seq<PersistentMemoryByte>,
+        pub next_write_id: WriteID,
     }
 
     impl PersistentMemoryRegionRawView
@@ -268,8 +277,9 @@ verus! {
         {
             Self {
                 state: self.state.map(|pos: int, pre_byte: PersistentMemoryByte|
-                                         if addr <= pos < addr + bytes.len() { pre_byte.write(bytes[pos - addr]) }
+                                         if addr <= pos < addr + bytes.len() { pre_byte.write(bytes[pos - addr], self.next_write_id) }
                                          else { pre_byte }),
+                next_write_id: self.next_write_id+1,
             }
         }
 
@@ -277,17 +287,8 @@ verus! {
         {
             Self {
                 state: self.state.map(|_addr, b: PersistentMemoryByte| b.flush()),
+                next_write_id: 0,
             }
-        }
-
-        pub open spec fn no_outstanding_writes_in_range(self, i: int, j: int) -> bool
-        {
-            forall |k| i <= k < j ==> (#[trigger] self.state[k].outstanding_write) is None
-        }
-
-        pub open spec fn no_outstanding_writes(self) -> bool
-        {
-            Self::no_outstanding_writes_in_range(self, 0, self.state.len() as int)
         }
 
         pub open spec fn committed(self) -> Seq<u8>
@@ -295,28 +296,25 @@ verus! {
             self.state.map(|_addr, b: PersistentMemoryByte| b.state_at_last_flush)
         }
 
-        // This specification function describes what it means for
-        // chunk number `chunk` in `self` to match the corresponding
-        // bytes in `bytes` if outstanding writes to those bytes in
-        // `self` haven't happened yet.
-        pub open spec fn chunk_corresponds_ignoring_outstanding_writes(self, chunk: int, bytes: Seq<u8>) -> bool
+        pub open spec fn readable(self) -> Seq<u8>
         {
-            forall |addr: int| {
-                &&& 0 <= addr < self.len()
-                &&& addr_in_chunk(chunk, addr)
-            } ==> #[trigger] bytes[addr] == self.state[addr].state_at_last_flush
+            self.flush().committed()
         }
 
         // This specification function describes what it means for
         // chunk number `chunk` in `self` to match the corresponding
-        // bytes in `bytes` if outstanding writes to those bytes in
-        // `self` have all been performed.
-        pub open spec fn chunk_corresponds_after_flush(self, chunk: int, bytes: Seq<u8>) -> bool
+        // bytes in `bytes`, for the chunk_write'th write to that chunk.
+        pub open spec fn chunk_corresponds(self, chunk: int, keep: Set<WriteID>, bytes: Seq<u8>) -> bool
         {
             forall |addr: int| {
                 &&& 0 <= addr < self.len()
                 &&& addr_in_chunk(chunk, addr)
-            } ==> #[trigger] bytes[addr] == self.state[addr].flush_byte()
+            } ==> #[trigger] bytes[addr] == self.state[addr].keep_writes(keep).flush_byte()
+        }
+
+        pub open spec fn chunk_corresponds_exists(self, chunk: int, bytes: Seq<u8>) -> bool
+        {
+            exists |keep: Set<WriteID>| #[trigger] self.chunk_corresponds(chunk, keep, bytes)
         }
 
         // This specification function describes whether `self` can
@@ -330,10 +328,7 @@ verus! {
         pub open spec fn can_crash_as(self, bytes: Seq<u8>) -> bool
         {
             &&& bytes.len() == self.len()
-            &&& forall |chunk| {
-                  ||| self.chunk_corresponds_ignoring_outstanding_writes(chunk, bytes)
-                  ||| self.chunk_corresponds_after_flush(chunk, bytes)
-              }
+            &&& forall |chunk| self.chunk_corresponds_exists(chunk, bytes)
         }
     }
 
@@ -370,13 +365,12 @@ verus! {
             requires
                 self.inv(),
                 addr + S::spec_size_of() <= self@.len(),
-                self@.no_outstanding_writes_in_range(addr as int, addr + S::spec_size_of()),
                 // We must have previously written a serialized S to this addr
-                S::bytes_parseable(self@.committed().subrange(addr as int, addr + S::spec_size_of()))
+                S::bytes_parseable(self@.readable().subrange(addr as int, addr + S::spec_size_of()))
             ensures
                 match bytes {
                     Ok(bytes) => {
-                        let true_bytes = self@.committed().subrange(addr as int, addr + S::spec_size_of());
+                        let true_bytes = self@.readable().subrange(addr as int, addr + S::spec_size_of());
                         let addrs = Seq::<int>::new(S::spec_size_of() as nat, |i: int| i + addr);
                         // If the persistent memory regions are impervious
                         // to corruption, read returns the last bytes
@@ -397,11 +391,10 @@ verus! {
             requires 
                 self.inv(),
                 addr + num_bytes <= self@.len(),
-                self@.no_outstanding_writes_in_range(addr as int, addr + num_bytes),
             ensures 
                 match bytes {
                     Ok(bytes) => {
-                        let true_bytes = self@.committed().subrange(addr as int, addr + num_bytes);
+                        let true_bytes = self@.readable().subrange(addr as int, addr + num_bytes);
                         let addrs = Seq::<int>::new(num_bytes as nat, |i: int| i + addr);
                         &&& // If the persistent memory regions are impervious
                             // to corruption, read returns the last bytes
@@ -424,8 +417,6 @@ verus! {
                 old(self).inv(),
                 addr + bytes@.len() <= old(self)@.len(),
                 addr + bytes@.len() <= u64::MAX,
-                // Writes aren't allowed where there are already outstanding writes.
-                old(self)@.no_outstanding_writes_in_range(addr as int, addr + bytes@.len()),
             ensures
                 self.inv(),
                 self.constants() == old(self).constants(),
@@ -438,7 +429,6 @@ verus! {
             requires
                 old(self).inv(),
                 addr + S::spec_size_of() <= old(self)@.len(),
-                old(self)@.no_outstanding_writes_in_range(addr as int, addr + S::spec_size_of()),
             ensures
                 self.inv(),
                 self.constants() == old(self).constants(),

@@ -291,6 +291,14 @@ verus! {
             }
         }
 
+        pub open spec fn keep_writes(self, keep: Seq<Set<WriteID>>) -> Self
+        {
+            Self {
+                state: self.state.map(|addr: int, b: PersistentMemoryByte| b.keep_writes(keep[addr / const_persistence_chunk_size()])),
+                next_write_id: 0,
+            }
+        }
+
         pub open spec fn committed(self) -> Seq<u8>
         {
             self.state.map(|_addr, b: PersistentMemoryByte| b.state_at_last_flush)
@@ -299,6 +307,11 @@ verus! {
         pub open spec fn readable(self) -> Seq<u8>
         {
             self.flush().committed()
+        }
+
+        pub open spec fn no_outstanding_writes(self) -> bool
+        {
+            forall |k| (#[trigger] self.state[k].outstanding_writes.len()) == 0
         }
 
         // This specification function describes what it means for
@@ -416,7 +429,6 @@ verus! {
             requires
                 old(self).inv(),
                 addr + bytes@.len() <= old(self)@.len(),
-                addr + bytes@.len() <= u64::MAX,
             ensures
                 self.inv(),
                 self.constants() == old(self).constants(),

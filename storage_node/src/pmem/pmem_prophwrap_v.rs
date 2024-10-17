@@ -165,9 +165,7 @@ impl<PMRegion> PMRegionProph<PMRegion>
     pub fn crash(self)
     {
         let mut mself = self;
-        let mut flushproph = Prophecy::<bool>::new();
-        std::mem::swap(&mut mself.flush, &mut flushproph);
-        flushproph.resolve(&false);
+        mself.flush.resolve(&false);
 
         // XXX resolving prophecy would be a way to enforce that the prophecy
         // could be resolved with any value at crash-time.

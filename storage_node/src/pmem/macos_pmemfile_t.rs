@@ -1,6 +1,8 @@
+// #![verus::trusted]
+//
 // MacOSX does not support PMDK, so we simply support mmap-based
 // memory-mapped files, for development purposes.
-// #![verus::trusted]
+//
 use crate::pmem::pmcopy_t::*;
 use crate::pmem::pmemspec_t::*;
 use core::ffi::c_void;
@@ -100,7 +102,11 @@ impl MemoryMappedFileSection {
 
         std::mem::drop(mmf_borrowed);
 
-        let section = Self { mmf, offset: offset, size: len };
+        let section = Self {
+            mmf,
+            offset: offset,
+            size: len,
+        };
         Ok(section)
     }
 }

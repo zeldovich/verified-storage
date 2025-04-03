@@ -37,9 +37,9 @@ impl CheckPermission<Seq<u8>> for TrustedKvPermission
         (self.is_state_allowable)(state)
     }
 
-    closed spec fn valid(&self, id: int) -> bool
+    closed spec fn id(&self) -> int
     {
-        true
+        0
     }
 
     proof fn apply(tracked &self, tracked credit: vstd::invariant::OpenInvariantCredit, tracked r: &mut Frac<Seq<u8>>, new_state: Seq<u8>)
